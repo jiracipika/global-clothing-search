@@ -29,8 +29,14 @@ npm run build
 
 ## Deploy
 
-The repo is Vercel-ready. Import it into Vercel and set the project root to:
+The repo is Vercel-ready.
 
-`apps/web`
+Recommended import settings:
 
-No environment variables are required for the current free-source version.
+- Framework preset: Next.js
+- Root directory: repository root
+- Install command: `npm install`
+- Build command: `npm --workspace apps/web run build`
+- No environment variables required for the current free-source version
+
+A root `vercel.json` is included so Vercel can build the workspace app from the monorepo root.
