@@ -1,42 +1,32 @@
 # ThreadHunt
 
-ThreadHunt is a free-source clothing price search workbench.
+ThreadHunt is a private, free-source shopping-research workbench. It combines live open-web leads, direct marketplace searches, browser-only image/video tools, and a locally persisted comparison shortlist without affiliate links or paid API claims.
 
-It helps a user search for cheaper clothing matches globally using:
+## Product workflow
 
-- DuckDuckGo HTML web search through a Next.js route handler
-- Marketplace jump links for eBay, AliExpress, Temu, Amazon, Etsy, Vinted, Depop, Poshmark, Grailed, The RealReal, Vestiaire, ASOS, Zara, H&M, Uniqlo, SHEIN, Zalando, and Farfetch
-- Manual reverse-image handoff links for Google Lens, Bing Visual Search, Yandex Images, Pinterest Lens, and AliExpress
-- Browser-side image palette extraction
-- Browser-side video frame extraction for visual searching
+- Search by item details, region, and optional price target; filter and sort returned leads.
+- Review per-source diagnostics when an upstream source is partially unavailable.
+- Save leads across searches into a browser-local comparison shortlist; reuse local search history.
+- Extract an image palette or four frames from an MP4/WebM/QuickTime video, then hand them to Lens, Bing, Yandex, or Pinterest. Uploaded files never leave the browser.
+- File controls validate explicit formats and limits (images 10 MB; videos 75 MB and 5 minutes).
 
-Important honesty note: most true reverse-image and shopping APIs are paid, key-gated, or legally restricted. This app uses free sources and direct search handoffs instead of pretending a paid API is free.
+The search API validates and bounds input, applies a small per-instance rate limit and five-minute upstream cache, times out upstream requests, filters non-public result URLs, deduplicates leads, and reports partial failures. DuckDuckGo HTML is an unofficial free source and can change or rate-limit; results are research leads, not verified inventory or final prices.
 
-## Local development
+## Develop and verify
+
+Requires a current Node.js LTS release.
 
 ```bash
 npm install
-npm run dev
-```
-
-Open `http://localhost:3000`.
-
-## Build
-
-```bash
+npm run dev             # http://localhost:3000
+npm test
+npm run lint
+npm run typecheck
 npm run build
 ```
 
-## Deploy
+No environment variables are required. Browser data uses the `threadhunt:saved` and `threadhunt:history` localStorage keys. Clear these in the UI or browser storage. The in-memory API cache/rate buckets are per server instance and intentionally not a distributed enforcement mechanism.
 
-The repo is Vercel-ready.
+## Deployment
 
-Recommended import settings:
-
-- Framework preset: Next.js
-- Root directory: repository root
-- Install command: `npm install`
-- Build command: `npm --workspace apps/web run build`
-- No environment variables required for the current free-source version
-
-A root `vercel.json` is included so Vercel can build the workspace app from the monorepo root.
+The repository is Vercel-ready. Import the repository root, use the Next.js preset, `npm install`, and `npm --workspace apps/web run build`. See `free-source-strategy.md` for source trade-offs.
