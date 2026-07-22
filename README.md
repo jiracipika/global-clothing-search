@@ -8,7 +8,8 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 - Review per-source diagnostics when an upstream source is partially unavailable.
 - Save leads across searches into a browser-local decision workspace; record stage, quoted price, size/variant, and research notes.
 - Triage larger shortlists by decision stage and priority, with visible evidence-completeness cues for fair comparison.
-- Export the annotated shortlist as spreadsheet-safe CSV, or back up and merge-restore the complete workspace as validated, versioned JSON; legacy saved leads migrate automatically.
+- Select two to four leads for a durable, accessible side-by-side evidence table covering stage, price, variant, completeness, and notes.
+- Export the annotated shortlist as spreadsheet-safe CSV, or back up and merge-restore the complete workspace—including comparison picks—as validated, versioned JSON; version 1 backups and legacy saved leads migrate automatically.
 - Reuse local search history across research sessions.
 - Extract an image palette or four frames from an MP4/WebM/QuickTime video, then hand them to Lens, Bing, Yandex, or Pinterest. Uploaded files never leave the browser.
 - File controls validate explicit formats and limits (images 10 MB; videos 75 MB and 5 minutes).
@@ -28,7 +29,7 @@ npm run typecheck
 npm run build
 ```
 
-No environment variables are required. Browser data uses the `threadhunt:saved` and `threadhunt:history` localStorage keys. Clear these in the UI or browser storage. The in-memory API cache/rate buckets are per server instance and intentionally not a distributed enforcement mechanism.
+No environment variables are required. Browser data uses the `threadhunt:saved`, `threadhunt:history`, and `threadhunt:comparison` localStorage keys. Clear these in the UI or browser storage. The in-memory API cache/rate buckets are per server instance and intentionally not a distributed enforcement mechanism.
 
 ## Deployment
 

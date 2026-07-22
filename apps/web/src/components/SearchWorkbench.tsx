@@ -11,9 +11,12 @@ import {
   filterAndSort,
   filterAndSortSavedLeads,
   leadMissingFields,
+  MAX_COMPARISON_LEADS,
+  normalizeComparisonUrls,
   normalizeSavedLeads,
   normalizeSearchHistory,
   parseWorkspaceBackup,
+  toggleComparisonUrl,
   type LeadStatus,
   type SavedLead,
   type SearchHistory,
@@ -42,27 +45,33 @@ export default function SearchWorkbench() {
   const [error, setError] = useState(''); const [mediaError, setMediaError] = useState('');
   const [resultFilter, setResultFilter] = useState(''); const [sort, setSort] = useState<SortMode>('relevance');
   const [saved, setSaved] = useState<SavedLead[]>([]); const [history, setHistory] = useState<SearchHistory[]>([]); const [ready, setReady] = useState(false);
+  const [comparisonUrls, setComparisonUrls] = useState<string[]>([]);
   const [shortlistMessage, setShortlistMessage] = useState('');
   const [shortlistFilter, setShortlistFilter] = useState<ShortlistFilter>('all'); const [shortlistSort, setShortlistSort] = useState<ShortlistSort>('newest');
   const [lastCleared, setLastCleared] = useState<SavedLead[] | null>(null);
+  const [lastClearedComparison, setLastClearedComparison] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null); const videoInput = useRef<HTMLInputElement>(null); const backupInput = useRef<HTMLInputElement>(null); const previewRef = useRef('');
 
   useEffect(() => {
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
-      setSaved(normalizeSavedLeads(load<unknown>('threadhunt:saved', [])));
+      const restoredSaved = normalizeSavedLeads(load<unknown>('threadhunt:saved', []));
+      setSaved(restoredSaved);
       setHistory(normalizeSearchHistory(load<unknown>('threadhunt:history', [])));
+      setComparisonUrls(normalizeComparisonUrls(load<unknown>('threadhunt:comparison', []), restoredSaved));
       setReady(true);
     });
     return () => { active = false; };
   }, []);
   useEffect(() => { if (ready) localStorage.setItem('threadhunt:saved', JSON.stringify(saved)); }, [saved, ready]);
   useEffect(() => { if (ready) localStorage.setItem('threadhunt:history', JSON.stringify(history)); }, [history, ready]);
+  useEffect(() => { if (ready) localStorage.setItem('threadhunt:comparison', JSON.stringify(comparisonUrls)); }, [comparisonUrls, ready]);
   useEffect(() => () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current); }, []);
 
   const shown = useMemo(() => filterAndSort(data?.results || [], resultFilter, sort), [data, resultFilter, sort]);
   const shownSaved = useMemo(() => filterAndSortSavedLeads(saved, shortlistFilter, shortlistSort), [saved, shortlistFilter, shortlistSort]);
+  const comparedLeads = useMemo(() => comparisonUrls.flatMap((url) => { const lead = saved.find((item) => item.url === url); return lead ? [lead] : []; }), [comparisonUrls, saved]);
   const readyToCompare = useMemo(() => saved.filter((lead) => leadMissingFields(lead).length === 0).length, [saved]);
   const visualLinks = useMemo(() => [
     ['Google Lens', googleLensUrl(imageUrl), imageUrl ? 'Open the public image URL directly' : 'Upload or paste an image there'],
@@ -112,9 +121,14 @@ export default function SearchWorkbench() {
   }
   function toggleSaved(item: SearchResult) {
     setLastCleared(null);
-    setSaved((old) => old.some((lead) => lead.url === item.url)
-      ? old.filter((lead) => lead.url !== item.url)
-      : [...old, createSavedLead(item)]);
+    const removing = saved.some((lead) => lead.url === item.url);
+    setSaved((old) => removing ? old.filter((lead) => lead.url !== item.url) : [...old, createSavedLead(item)]);
+    if (removing) setComparisonUrls((current) => current.filter((url) => url !== item.url));
+  }
+  function toggleComparison(url: string) {
+    const atLimit = !comparisonUrls.includes(url) && comparisonUrls.length >= MAX_COMPARISON_LEADS;
+    setComparisonUrls((current) => toggleComparisonUrl(current, url, saved));
+    setShortlistMessage(atLimit ? `Compare up to ${MAX_COMPARISON_LEADS} leads at a time. Remove one before adding another.` : '');
   }
   function updateSaved(url: string, patch: Partial<Pick<SavedLead, 'status' | 'quotedPrice' | 'size' | 'notes'>>) {
     setSaved((old) => old.map((lead) => lead.url === url ? { ...lead, ...patch } : lead));
@@ -131,17 +145,19 @@ export default function SearchWorkbench() {
     setShortlistMessage(`Exported ${saved.length} ${saved.length === 1 ? 'lead' : 'leads'} as CSV.`);
   }
   function downloadBackup() {
-    downloadText([exportWorkspaceBackup(saved, history)], 'application/json;charset=utf-8', `threadhunt-workspace-${new Date().toISOString().slice(0, 10)}.json`);
-    setShortlistMessage(`Backed up ${saved.length} leads and ${history.length} recent searches.`);
+    downloadText([exportWorkspaceBackup(saved, history, comparisonUrls)], 'application/json;charset=utf-8', `threadhunt-workspace-${new Date().toISOString().slice(0, 10)}.json`);
+    setShortlistMessage(`Backed up ${saved.length} leads, ${comparisonUrls.length} comparison picks, and ${history.length} recent searches.`);
   }
   async function restoreBackup(file: File) {
     if (file.size > 1024 * 1024) { setShortlistMessage('Backup must be 1 MB or smaller.'); if (backupInput.current) backupInput.current.value = ''; return; }
     try {
       const restored = parseWorkspaceBackup(await file.text());
-      setSaved((current) => normalizeSavedLeads([...restored.saved, ...current]));
+      const mergedSaved = normalizeSavedLeads([...restored.saved, ...saved]);
+      setSaved(mergedSaved);
       setHistory((current) => normalizeSearchHistory([...restored.history, ...current]));
+      setComparisonUrls((current) => normalizeComparisonUrls([...restored.comparisonUrls, ...current], mergedSaved));
       setLastCleared(null);
-      setShortlistMessage(`Restored ${restored.saved.length} leads and ${restored.history.length} recent searches. Existing unique items were kept.`);
+      setShortlistMessage(`Restored ${restored.saved.length} leads, ${restored.comparisonUrls.length} comparison picks, and ${restored.history.length} recent searches. Existing unique items were kept.`);
     } catch (restoreError) {
       setShortlistMessage(restoreError instanceof Error ? restoreError.message : 'Could not restore this backup.');
     } finally {
@@ -150,11 +166,11 @@ export default function SearchWorkbench() {
   }
   function clearShortlist() {
     if (!window.confirm(`Clear all ${saved.length} saved leads? You can undo this until you change the shortlist.`)) return;
-    setLastCleared(saved); setSaved([]); setShortlistMessage(`Cleared ${saved.length} leads.`);
+    setLastCleared(saved); setLastClearedComparison(comparisonUrls); setSaved([]); setComparisonUrls([]); setShortlistMessage(`Cleared ${saved.length} leads.`);
   }
   function undoClear() {
     if (!lastCleared) return;
-    setSaved(lastCleared); setShortlistMessage(`Restored ${lastCleared.length} leads.`); setLastCleared(null);
+    setSaved(lastCleared); setComparisonUrls(normalizeComparisonUrls(lastClearedComparison, lastCleared)); setShortlistMessage(`Restored ${lastCleared.length} leads.`); setLastCleared(null); setLastClearedComparison([]);
   }
 
   return <>
@@ -203,13 +219,33 @@ export default function SearchWorkbench() {
           <div><label htmlFor="shortlist-sort">Order by</label><select id="shortlist-sort" value={shortlistSort} onChange={(event) => setShortlistSort(event.target.value as ShortlistSort)}><option value="newest">Newest saved</option><option value="status">Decision priority</option><option value="title">Title A–Z</option></select></div>
           <p><b>{shownSaved.length}</b> {shownSaved.length === 1 ? 'lead' : 'leads'} in this view</p>
         </div>
+        <section className="comparisonWorkspace" aria-labelledby="comparison-title">
+          <div className="comparisonHead">
+            <div><p className="step">Side-by-side decision</p><h3 id="comparison-title">Compare selected leads</h3><p>Select 2–{MAX_COMPARISON_LEADS} saved leads below. Your selection stays in this browser and is included in workspace backups.</p></div>
+            <div className="comparisonCount" aria-live="polite"><b>{comparedLeads.length}</b> / {MAX_COMPARISON_LEADS} selected{comparedLeads.length > 0 && <button type="button" onClick={() => setComparisonUrls([])}>Clear selection</button>}</div>
+          </div>
+          {comparedLeads.length >= 2 ? <div className="comparisonScroll" tabIndex={0} aria-label="Scrollable comparison table">
+            <table className="comparisonTable">
+              <caption className="srOnly">Side-by-side details for selected clothing leads</caption>
+              <thead><tr><th scope="col">Evidence</th>{comparedLeads.map((lead) => <th scope="col" key={lead.url}><a href={lead.url} target="_blank" rel="noopener noreferrer">{lead.title} ↗</a><small>{lead.source}</small></th>)}</tr></thead>
+              <tbody>
+                <tr><th scope="row">Decision stage</th>{comparedLeads.map((lead) => <td key={lead.url}><span className={`statusPill ${lead.status}`}>{lead.status}</span></td>)}</tr>
+                <tr><th scope="row">Quoted price</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.quotedPrice || <span className="missingValue">Not recorded</span>}</td>)}</tr>
+                <tr><th scope="row">Size / variant</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.size || <span className="missingValue">Not recorded</span>}</td>)}</tr>
+                <tr><th scope="row">Evidence status</th>{comparedLeads.map((lead) => { const count = leadMissingFields(lead).length; return <td key={lead.url} className={count === 0 ? 'completeValue' : ''}>{count === 0 ? 'Complete' : `${count} details needed`}</td>; })}</tr>
+                <tr><th scope="row">Research notes</th>{comparedLeads.map((lead) => <td key={lead.url} className="comparisonNotes">{lead.notes || <span className="missingValue">Not recorded</span>}</td>)}</tr>
+                <tr><th scope="row">Selection</th>{comparedLeads.map((lead) => <td key={lead.url}><button type="button" className="removeComparison" onClick={() => toggleComparison(lead.url)}>Remove from comparison</button></td>)}</tr>
+              </tbody>
+            </table>
+          </div> : <p className="comparisonPrompt">{comparedLeads.length === 1 ? 'Select one more lead to open the comparison table.' : 'Choose leads with the “Compare” control on each card.'}</p>}
+        </section>
         {shownSaved.length > 0 ? <div className="researchList">
           {shownSaved.map((lead, index) => {
             const missing = leadMissingFields(lead);
             return <article className="researchCard" key={lead.url}>
               <div className="researchCardHead">
                 <div><span className={`statusPill ${lead.status}`}>{lead.status}</span><h3><a href={lead.url} target="_blank" rel="noopener noreferrer">{lead.title} ↗</a></h3><p>{lead.source}</p></div>
-                <button type="button" className="removeLead" onClick={() => toggleSaved(lead)} aria-label={`Remove ${lead.title} from shortlist`}>Remove</button>
+                <div className="cardActions"><label className="compareToggle"><input type="checkbox" checked={comparisonUrls.includes(lead.url)} onChange={() => toggleComparison(lead.url)} disabled={!comparisonUrls.includes(lead.url) && comparisonUrls.length >= MAX_COMPARISON_LEADS} /><span>Compare</span></label><button type="button" className="removeLead" onClick={() => toggleSaved(lead)} aria-label={`Remove ${lead.title} from shortlist`}>Remove</button></div>
               </div>
               <div className={`evidenceStatus ${missing.length === 0 ? 'complete' : ''}`}><strong>{missing.length === 0 ? 'Evidence complete' : `${missing.length} ${missing.length === 1 ? 'detail' : 'details'} needed`}</strong><span>{missing.length === 0 ? 'Ready for a like-for-like decision.' : `Add ${missing.join(', ')} before comparing.`}</span></div>
               <div className="researchFields">

@@ -11,6 +11,7 @@ export type SavedLead = SearchResult & {
   notes: string;
   savedAt: string;
 };
+export const MAX_COMPARISON_LEADS = 4;
 
 export function decodeHtml(input: string): string {
   return input
@@ -70,6 +71,24 @@ export function normalizeSavedLeads(value: unknown, migratedAt = new Date().toIS
   return leads.slice(0, 100);
 }
 
+export function normalizeComparisonUrls(value: unknown, leads: SavedLead[]): string[] {
+  if (!Array.isArray(value)) return [];
+  const available = new Set(leads.map((lead) => lead.url));
+  const unique = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry === 'string' && available.has(entry)) unique.add(entry);
+    if (unique.size === MAX_COMPARISON_LEADS) break;
+  }
+  return [...unique];
+}
+
+export function toggleComparisonUrl(current: string[], url: string, leads: SavedLead[]): string[] {
+  const normalized = normalizeComparisonUrls(current, leads);
+  if (normalized.includes(url)) return normalized.filter((entry) => entry !== url);
+  if (!leads.some((lead) => lead.url === url) || normalized.length >= MAX_COMPARISON_LEADS) return normalized;
+  return [...normalized, url];
+}
+
 function csvCell(value: string): string {
   const spreadsheetSafe = /^[=+\-@]/.test(value) ? `'${value}` : value;
   return /[",\r\n]/.test(spreadsheetSafe) ? `"${spreadsheetSafe.replace(/"/g, '""')}"` : spreadsheetSafe;
@@ -120,17 +139,19 @@ export function normalizeSearchHistory(value: unknown): SearchHistory[] {
   return history.slice(0, 8);
 }
 
-export function exportWorkspaceBackup(saved: SavedLead[], history: SearchHistory[], exportedAt = new Date().toISOString()): string {
-  return JSON.stringify({ product: 'ThreadHunt', version: 1, exportedAt, saved: normalizeSavedLeads(saved, exportedAt), history: normalizeSearchHistory(history) }, null, 2);
+export function exportWorkspaceBackup(saved: SavedLead[], history: SearchHistory[], comparisonUrls: string[] = [], exportedAt = new Date().toISOString()): string {
+  const normalizedSaved = normalizeSavedLeads(saved, exportedAt);
+  return JSON.stringify({ product: 'ThreadHunt', version: 2, exportedAt, saved: normalizedSaved, history: normalizeSearchHistory(history), comparisonUrls: normalizeComparisonUrls(comparisonUrls, normalizedSaved) }, null, 2);
 }
 
-export function parseWorkspaceBackup(input: string, importedAt = new Date().toISOString()): { saved: SavedLead[]; history: SearchHistory[] } {
+export function parseWorkspaceBackup(input: string, importedAt = new Date().toISOString()): { saved: SavedLead[]; history: SearchHistory[]; comparisonUrls: string[] } {
   let value: unknown;
   try { value = JSON.parse(input); } catch { throw new Error('The selected backup is not valid JSON.'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The selected file is not a ThreadHunt workspace backup.');
   const backup = value as Record<string, unknown>;
-  if (backup.product !== 'ThreadHunt' || backup.version !== 1) throw new Error('The selected file is not a ThreadHunt workspace backup.');
-  return { saved: normalizeSavedLeads(backup.saved, importedAt), history: normalizeSearchHistory(backup.history) };
+  if (backup.product !== 'ThreadHunt' || (backup.version !== 1 && backup.version !== 2)) throw new Error('The selected file is not a ThreadHunt workspace backup.');
+  const saved = normalizeSavedLeads(backup.saved, importedAt);
+  return { saved, history: normalizeSearchHistory(backup.history), comparisonUrls: backup.version === 2 ? normalizeComparisonUrls(backup.comparisonUrls, saved) : [] };
 }
 
 export function decodeDdgUrl(raw: string): string | null {
