@@ -115,17 +115,17 @@ export default function SearchWorkbench() {
 
     <section className="panel grid">
       <div>
-        <label>Describe the item</label>
-        <textarea value={query} onChange={(e) => setQuery(e.target.value)} placeholder="brand + garment + color + material + cut" />
+        <label htmlFor="item-query">Describe the item</label>
+        <textarea id="item-query" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="brand + garment + color + material + cut" />
         <div className="chips">{exampleQueries.map((ex) => <button key={ex} onClick={() => { setQuery(ex); runSearch(ex); }}>{ex}</button>)}</div>
       </div>
       <div className="controls">
-        <label>Region</label>
-        <select value={region} onChange={(e) => setRegion(e.target.value)}>
+        <label htmlFor="search-region">Region</label>
+        <select id="search-region" value={region} onChange={(e) => setRegion(e.target.value)}>
           <option>global</option><option>US</option><option>EU</option><option>UK</option><option>Japan</option><option>China</option><option>Australia</option>
         </select>
-        <label>Target max price</label>
-        <input value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="$50 / €40 / ¥5000" />
+        <label htmlFor="max-price">Target max price</label>
+        <input id="max-price" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="$50 / €40 / ¥5000" />
         <button className="primary" onClick={() => runSearch()} disabled={loading}>{loading ? 'Searching...' : 'Search free sources'}</button>
       </div>
     </section>
@@ -140,8 +140,9 @@ export default function SearchWorkbench() {
           <button onClick={() => fileInput.current?.click()}>Upload image</button>
           <button onClick={() => videoInput.current?.click()}>Extract video frames</button>
         </div>
-        <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="Optional public image URL for Google Lens" />
-        <div className="visualLinks">{visualLinks.map((l) => <a key={l.name} href={l.url} target="_blank">{l.name}<span>{l.note}</span></a>)}</div>
+        <label htmlFor="image-url" className="srOnly">Public image URL for visual search</label>
+        <input id="image-url" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="Optional public image URL for Google Lens" />
+        <div className="visualLinks">{visualLinks.map((l) => <a key={l.name} href={l.url} target="_blank" rel="noreferrer">{l.name}<span>{l.note}</span></a>)}</div>
       </div>
       <div className="previewBox">
         {preview ? <img src={preview} alt="Uploaded clothing preview" /> : <div className="empty">image preview</div>}
@@ -151,17 +152,17 @@ export default function SearchWorkbench() {
 
     {frames.length > 0 && <section className="panel"><h2>Video frames</h2><div className="frames">{frames.map((f) => <a key={f.at} href={f.url} download={`threadhunt-frame-${Math.round(f.at)}.jpg`}><img src={f.url} alt={`Frame at ${f.at.toFixed(1)} seconds`} /><span>{f.at.toFixed(1)}s download</span></a>)}</div></section>}
 
-    {error && <section className="error">{error}</section>}
+    {error && <section className="error" role="alert">{error}</section>}
 
     {data && <section className="results">
       <div className="panel">
         <h2>Live web leads</h2>
         <p className="muted">Pulled from DuckDuckGo HTML search. Use these as leads, then verify size, shipping, seller, and return policy.</p>
-        <div className="cards">{data.results.map((r) => <a className="card" key={r.url} href={r.url} target="_blank"><b>{r.title}</b><small>{r.source}</small><p>{r.snippet}</p></a>)}</div>
+        <div className="cards">{data.results.map((r) => <a className="card" key={r.url} href={r.url} target="_blank" rel="noreferrer"><b>{r.title}</b><small>{r.source}</small><p>{r.snippet}</p></a>)}</div>
       </div>
       <div className="panel">
         <h2>Market jump list</h2>
-        <div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank"><strong>{m.name}</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div>
+        <div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noreferrer"><strong>{m.name}</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div>
       </div>
       <div className="panel caveats"><h2>Reality check</h2><ul>{data.caveats.map((c) => <li key={c}>{c}</li>)}</ul><p>Free sources used: {data.freeSources.join(', ')}.</p></div>
     </section>}

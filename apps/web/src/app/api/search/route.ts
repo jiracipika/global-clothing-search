@@ -1,36 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildMarkets } from '@/lib/markets';
+import { parseDuckDuckGoHtml, type DdgResult } from '@/lib/ddg';
 
 export const runtime = 'nodejs';
-
-type DdgResult = {
-  title: string;
-  url: string;
-  snippet: string;
-  source: string;
-};
-
-function stripTags(input: string) {
-  return input
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function decodeDdgUrl(raw: string) {
-  try {
-    const url = new URL(raw.startsWith('//') ? `https:${raw}` : raw);
-    const uddg = url.searchParams.get('uddg');
-    return uddg ? decodeURIComponent(uddg) : raw;
-  } catch {
-    return raw;
-  }
-}
 
 async function duckDuckGoHtml(query: string): Promise<DdgResult[]> {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
@@ -43,18 +15,7 @@ async function duckDuckGoHtml(query: string): Promise<DdgResult[]> {
   });
   if (!res.ok) throw new Error(`DuckDuckGo returned ${res.status}`);
   const html = await res.text();
-  const chunks = html.split(/<div class="result results_links results_links_deep web-result"/g).slice(1, 9);
-  const results: DdgResult[] = [];
-  for (const chunk of chunks) {
-    const linkMatch = chunk.match(/<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-    if (!linkMatch) continue;
-    const snippetMatch = chunk.match(/<a class="result__snippet"[\s\S]*?>([\s\S]*?)<\/a>/);
-    const href = decodeDdgUrl(linkMatch[1]);
-    let source = '';
-    try { source = new URL(href).hostname.replace(/^www\./, ''); } catch { source = href; }
-    results.push({ title: stripTags(linkMatch[2]), url: href, snippet: stripTags(snippetMatch?.[1] ?? ''), source });
-  }
-  return results;
+  return parseDuckDuckGoHtml(html);
 }
 
 export async function POST(req: NextRequest) {
