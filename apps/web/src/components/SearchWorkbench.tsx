@@ -4,7 +4,16 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { exampleQueries, type Market } from '@/lib/markets';
-import { filterAndSort, type SearchResult, type SortMode } from '@/lib/search-domain';
+import {
+  createSavedLead,
+  exportShortlistCsv,
+  filterAndSort,
+  normalizeSavedLeads,
+  type LeadStatus,
+  type SavedLead,
+  type SearchResult,
+  type SortMode,
+} from '@/lib/search-domain';
 
 type Diagnostic = { source: string; status: 'ok' | 'unavailable'; count: number };
 type SearchResponse = { query: string; results: SearchResult[]; markets: Market[]; caveats: string[]; freeSources: string[]; generatedAt: string; diagnostics: Diagnostic[] };
@@ -25,14 +34,15 @@ export default function SearchWorkbench() {
   const [data, setData] = useState<SearchResponse | null>(null); const [loading, setLoading] = useState(false);
   const [error, setError] = useState(''); const [mediaError, setMediaError] = useState('');
   const [resultFilter, setResultFilter] = useState(''); const [sort, setSort] = useState<SortMode>('relevance');
-  const [saved, setSaved] = useState<SearchResult[]>([]); const [history, setHistory] = useState<History[]>([]); const [ready, setReady] = useState(false);
+  const [saved, setSaved] = useState<SavedLead[]>([]); const [history, setHistory] = useState<History[]>([]); const [ready, setReady] = useState(false);
+  const [shortlistMessage, setShortlistMessage] = useState('');
   const fileInput = useRef<HTMLInputElement>(null); const videoInput = useRef<HTMLInputElement>(null); const previewRef = useRef('');
 
   useEffect(() => {
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
-      setSaved(load('threadhunt:saved', []));
+      setSaved(normalizeSavedLeads(load<unknown>('threadhunt:saved', [])));
       setHistory(load('threadhunt:history', []));
       setReady(true);
     });
@@ -51,6 +61,7 @@ export default function SearchWorkbench() {
   ], [imageUrl]);
 
   async function runSearch(nextQuery = query) {
+    if (loading) return;
     const clean = nextQuery.trim(); if (clean.length < 2) { setError('Enter at least 2 characters.'); return; }
     setLoading(true); setError('');
     try {
@@ -88,9 +99,26 @@ export default function SearchWorkbench() {
       const out: Frame[] = []; for (const at of [0.1, .35, .6, .85].map((x) => Math.min(video.duration * x, video.duration - .05))) { await new Promise<void>((resolve, reject) => { const timeout = setTimeout(() => reject(new Error()), 4000); video.onseeked = () => { clearTimeout(timeout); resolve(); }; video.currentTime = at; }); ctx.drawImage(video, 0, 0, canvas.width, canvas.height); out.push({ at, url: canvas.toDataURL('image/jpeg', .82) }); } setFrames(out);
     } catch { setMediaError('Could not process this video. Use MP4/WebM under 5 minutes.'); } finally { video.removeAttribute('src'); video.load(); URL.revokeObjectURL(url); }
   }
-  function toggleSaved(item: SearchResult) { setSaved((old) => old.some((x) => x.url === item.url) ? old.filter((x) => x.url !== item.url) : [...old, item]); }
+  function toggleSaved(item: SearchResult) {
+    setSaved((old) => old.some((lead) => lead.url === item.url)
+      ? old.filter((lead) => lead.url !== item.url)
+      : [...old, createSavedLead(item)]);
+  }
+  function updateSaved(url: string, patch: Partial<Pick<SavedLead, 'status' | 'quotedPrice' | 'size' | 'notes'>>) {
+    setSaved((old) => old.map((lead) => lead.url === url ? { ...lead, ...patch } : lead));
+  }
+  function downloadShortlist() {
+    const blobUrl = URL.createObjectURL(new Blob(['\uFEFF', exportShortlistCsv(saved)], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = blobUrl; link.download = `threadhunt-shortlist-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+    setShortlistMessage(`Exported ${saved.length} ${saved.length === 1 ? 'lead' : 'leads'} as CSV.`);
+  }
 
-  return <main>
+  return <>
+    <a className="skipLink" href="#workspace">Skip to research workspace</a>
+    <main id="workspace">
     <header className="topbar"><a className="brand" href="#top">THREADHUNT</a><nav aria-label="Workspace sections"><a href="#search">Search</a><a href="#visual">Visual tools</a><a href="#shortlist">Shortlist <span>{saved.length}</span></a></nav></header>
     <section className="hero" id="top"><p className="eyebrow">Independent shopping research</p><h1>Find the piece.<br/>Compare the market.</h1><p className="sub">Search open web and resale leads, create a durable shortlist, and move images or video frames into visual-search tools—all from one private workspace.</p></section>
 
@@ -99,7 +127,7 @@ export default function SearchWorkbench() {
       <label htmlFor="query">Item description</label><textarea id="query" required minLength={2} maxLength={160} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Color, garment, fabric, brand, fit…" />
       <p id="search-help" className="hint">Specific materials, cuts, and model names produce stronger leads.</p>
       <div className="chips" aria-label="Example searches">{exampleQueries.map((ex) => <button type="button" key={ex} onClick={() => { setQuery(ex); void runSearch(ex); }}>{ex}</button>)}</div>
-      <div className="formRow"><div><label htmlFor="region">Shopping region</label><select id="region" value={region} onChange={(e) => setRegion(e.target.value)}><option>global</option><option>US</option><option>EU</option><option>UK</option><option>Japan</option><option>China</option><option>Australia</option></select></div><div><label htmlFor="price">Maximum price <span>(optional)</span></label><input id="price" maxLength={30} value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="$80, €120, ¥12,000" /></div><button className="primary" disabled={loading}>{loading ? 'Researching…' : 'Search sources →'}</button></div>
+      <div className="formRow"><div><label htmlFor="region">Shopping region</label><select id="region" value={region} onChange={(e) => setRegion(e.target.value)}><option>global</option><option>US</option><option>EU</option><option>UK</option><option>Japan</option><option>China</option><option>Australia</option></select></div><div><label htmlFor="price">Maximum price <span>(optional)</span></label><input id="price" maxLength={30} value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="$80, €120, ¥12,000" /></div><button className="primary" aria-disabled={loading}>{loading ? 'Researching…' : 'Search sources →'}</button></div>
       <div className="status" role="status" aria-live="polite">{loading ? 'Checking web, resale, and alternatives sources.' : error ? <strong>{error}</strong> : data ? `${data.results.length} unique leads found.` : 'Ready to search.'}</div>
       {history.length > 0 && <div className="history"><span>Recent</span>{history.map((h) => <button type="button" key={h.query} onClick={() => { setQuery(h.query); void runSearch(h.query); }}>{h.query}</button>)}<button type="button" className="clear" onClick={() => setHistory([])}>Clear</button></div>}
     </form>
@@ -110,7 +138,37 @@ export default function SearchWorkbench() {
 
     {data && <section className="results"><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2>{data.query}</h2><p>{data.results.length} leads · {new Date(data.generatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p></div><div className="resultTools"><label htmlFor="filter">Filter leads</label><input id="filter" type="search" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} placeholder="Title, site, detail…"/><label htmlFor="sort">Sort by</label><select id="sort" value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="relevance">Relevance</option><option value="source">Source</option><option value="title">Title</option></select></div></div><div className="diagnostics" aria-label="Source status">{data.diagnostics.map((d) => <span className={d.status} key={d.source}><i/> {d.source}: {d.status === 'ok' ? `${d.count} found` : 'unavailable'}</span>)}</div><div className="cards">{shown.map((r) => <article className="card" key={r.url}><div><small>{r.source}</small><h3><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title} ↗</a></h3><p>{r.snippet || 'Open this result to review the current listing and price.'}</p></div><button type="button" aria-label={`${saved.some((x) => x.url === r.url) ? 'Remove' : 'Add'} ${r.title} ${saved.some((x) => x.url === r.url) ? 'from' : 'to'} shortlist`} onClick={() => toggleSaved(r)}>{saved.some((x) => x.url === r.url) ? 'Saved ✓' : '＋ Shortlist'}</button></article>)}</div>{shown.length === 0 && <p className="emptyResults">No leads match this filter.</p>}<details className="marketPanel"><summary>Browse {data.markets.length} direct marketplace searches</summary><div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noopener noreferrer"><strong>{m.name} ↗</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div></details></section>}
 
-    <section className="panel shortlist" id="shortlist"><div className="sectionTitle"><div><p className="step">04 / Comparison shortlist</p><h2>Saved leads</h2></div>{saved.length > 0 && <button className="quiet" onClick={() => setSaved([])}>Clear all</button>}</div>{saved.length ? <div className="compare" role="table" aria-label="Saved lead comparison"><div className="compareRow compareHead" role="row"><span>Lead</span><span>Source</span><span>Action</span></div>{saved.map((r) => <div className="compareRow" role="row" key={r.url}><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title} ↗</a><span>{r.source}</span><button onClick={() => toggleSaved(r)}>Remove</button></div>)}</div> : <div className="emptySaved"><b>Your shortlist is empty.</b><span>Save promising leads to compare them here across searches.</span></div>}</section>
+    <section className="panel shortlist" id="shortlist" aria-describedby="shortlist-help">
+      <div className="sectionTitle shortlistTitle">
+        <div><p className="step">04 / Comparison shortlist</p><h2>Decision workspace</h2></div>
+        {saved.length > 0 && <div className="shortlistActions"><button type="button" className="quiet" onClick={downloadShortlist}>Export CSV ↓</button><button type="button" className="quiet danger" onClick={() => { setSaved([]); setShortlistMessage('Shortlist cleared.'); }}>Clear all</button></div>}
+      </div>
+      <p id="shortlist-help" className="muted shortlistHelp">Record the listed price, available size, and evidence you still need. Every edit is saved in this browser and included in the CSV export.</p>
+      <p className="srOnly" role="status" aria-live="polite">{shortlistMessage}</p>
+      {saved.length ? <>
+        <div className="shortlistSummary" aria-label="Shortlist progress">
+          <span><b>{saved.length}</b> saved</span>
+          <span><b>{saved.filter((lead) => lead.status === 'contender').length}</b> contenders</span>
+          <span><b>{saved.filter((lead) => lead.status === 'purchased').length}</b> purchased</span>
+        </div>
+        <div className="researchList">
+          {saved.map((lead, index) => <article className="researchCard" key={lead.url}>
+            <div className="researchCardHead">
+              <div><span className={`statusPill ${lead.status}`}>{lead.status}</span><h3><a href={lead.url} target="_blank" rel="noopener noreferrer">{lead.title} ↗</a></h3><p>{lead.source}</p></div>
+              <button type="button" className="removeLead" onClick={() => toggleSaved(lead)} aria-label={`Remove ${lead.title} from shortlist`}>Remove</button>
+            </div>
+            <div className="researchFields">
+              <div><label htmlFor={`lead-status-${index}`}>Decision stage</label><select id={`lead-status-${index}`} value={lead.status} onChange={(event) => updateSaved(lead.url, { status: event.target.value as LeadStatus })}><option value="researching">Researching</option><option value="contender">Contender</option><option value="purchased">Purchased</option></select></div>
+              <div><label htmlFor={`lead-price-${index}`}>Quoted price</label><input id={`lead-price-${index}`} maxLength={80} value={lead.quotedPrice} onChange={(event) => updateSaved(lead.url, { quotedPrice: event.target.value })} placeholder="$95 shipped" /></div>
+              <div><label htmlFor={`lead-size-${index}`}>Size / variant</label><input id={`lead-size-${index}`} maxLength={80} value={lead.size} onChange={(event) => updateSaved(lead.url, { size: event.target.value })} placeholder="M · black" /></div>
+              <div className="notesField"><label htmlFor={`lead-notes-${index}`}>Research notes</label><textarea id={`lead-notes-${index}`} maxLength={1000} value={lead.notes} onChange={(event) => updateSaved(lead.url, { notes: event.target.value })} placeholder="Returns, condition, measurements, seller questions…" /><small>{lead.notes.length}/1000</small></div>
+            </div>
+            <p className="savedMeta">Saved {new Date(lead.savedAt).toLocaleDateString([], { dateStyle: 'medium' })}</p>
+          </article>)}
+        </div>
+      </> : <div className="emptySaved"><b>Your shortlist is empty.</b><span>Save promising leads, then annotate and compare them here across searches.</span></div>}
+    </section>
     <footer><b>ThreadHunt</b><span>Open-source shopping research · No affiliate links</span></footer>
-  </main>;
+    </main>
+  </>;
 }

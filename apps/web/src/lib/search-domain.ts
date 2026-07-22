@@ -1,5 +1,13 @@
 export type SearchResult = { title: string; url: string; snippet: string; source: string };
 export type SortMode = 'relevance' | 'source' | 'title';
+export type LeadStatus = 'researching' | 'contender' | 'purchased';
+export type SavedLead = SearchResult & {
+  status: LeadStatus;
+  quotedPrice: string;
+  size: string;
+  notes: string;
+  savedAt: string;
+};
 
 export function decodeHtml(input: string): string {
   return input
@@ -25,6 +33,50 @@ export function safePublicUrl(raw: string): string | null {
     url.username = ''; url.password = '';
     return url.toString();
   } catch { return null; }
+}
+
+const LEAD_STATUSES = new Set<LeadStatus>(['researching', 'contender', 'purchased']);
+const text = (value: unknown, max: number) => typeof value === 'string' ? value.trim().slice(0, max) : '';
+
+export function createSavedLead(result: SearchResult, savedAt = new Date().toISOString()): SavedLead {
+  return { ...result, status: 'researching', quotedPrice: '', size: '', notes: '', savedAt };
+}
+
+export function normalizeSavedLeads(value: unknown, migratedAt = new Date().toISOString()): SavedLead[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const leads: SavedLead[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const raw = entry as Record<string, unknown>;
+    const title = text(raw.title, 300); const source = text(raw.source, 160); const snippet = text(raw.snippet, 1000);
+    const url = typeof raw.url === 'string' ? safePublicUrl(raw.url) : null;
+    if (!title || !source || !url) continue;
+    const key = url.replace(/\/$/, '');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    leads.push({
+      title, source, snippet, url,
+      status: typeof raw.status === 'string' && LEAD_STATUSES.has(raw.status as LeadStatus) ? raw.status as LeadStatus : 'researching',
+      quotedPrice: text(raw.quotedPrice, 80),
+      size: text(raw.size, 80),
+      notes: text(raw.notes, 1000),
+      savedAt: typeof raw.savedAt === 'string' && Number.isFinite(Date.parse(raw.savedAt)) ? raw.savedAt : migratedAt,
+    });
+  }
+  return leads.slice(0, 100);
+}
+
+function csvCell(value: string): string {
+  const spreadsheetSafe = /^[=+\-@]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(spreadsheetSafe) ? `"${spreadsheetSafe.replace(/"/g, '""')}"` : spreadsheetSafe;
+}
+
+export function exportShortlistCsv(leads: SavedLead[]): string {
+  const rows = leads.map((lead) => [lead.title, lead.source, lead.status, lead.quotedPrice, lead.size, lead.notes, lead.url, lead.savedAt]);
+  return [['Title', 'Source', 'Status', 'Quoted price', 'Size', 'Notes', 'URL', 'Saved at'], ...rows]
+    .map((row) => row.map(csvCell).join(','))
+    .join('\r\n');
 }
 
 export function decodeDdgUrl(raw: string): string | null {
