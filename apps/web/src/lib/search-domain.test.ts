@@ -7,11 +7,14 @@ import {
   exportWorkspaceBackup,
   filterAndSort,
   filterAndSortSavedLeads,
+  formatLandedCost,
+  landedCost,
   leadMissingFields,
   mergeResults,
   normalizeComparisonUrls,
   normalizeSavedLeads,
   parseDdgHtml,
+  parseMoney,
   parseWorkspaceBackup,
   safePublicUrl,
   toggleComparisonUrl,
@@ -43,6 +46,7 @@ describe('shortlist research workflow', () => {
       ...result('Coat', 'https://shop.test/coat'),
       status: 'researching',
       quotedPrice: '',
+      shippingCost: '',
       size: '',
       notes: '',
       savedAt: '2026-07-22T00:00:00.000Z',
@@ -65,7 +69,7 @@ describe('shortlist research workflow', () => {
   it('preserves valid research fields while bounding user-entered text', () => {
     const saved = normalizeSavedLeads([{
       ...result('Coat', 'https://shop.test/coat'),
-      status: 'contender', quotedPrice: '$120', size: 'M', notes: 'x'.repeat(1200), savedAt: '2026-07-21T00:00:00.000Z',
+      status: 'contender', quotedPrice: '$120', shippingCost: 'free', size: 'M', notes: 'x'.repeat(1200), savedAt: '2026-07-21T00:00:00.000Z',
     }]);
 
     expect(saved[0].status).toBe('contender');
@@ -74,10 +78,10 @@ describe('shortlist research workflow', () => {
   });
 
   it('exports spreadsheet-safe CSV with research context', () => {
-    const lead = { ...createSavedLead(result('"Wool, coat"', 'https://shop.test/coat'), '2026-07-22T00:00:00.000Z'), status: 'contender' as const, quotedPrice: '=1+1', size: 'M', notes: 'Seller says "new"' };
+    const lead = { ...createSavedLead(result('"Wool, coat"', 'https://shop.test/coat'), '2026-07-22T00:00:00.000Z'), status: 'contender' as const, quotedPrice: '=1+1', shippingCost: '+$8', size: 'M', notes: 'Seller says "new"' };
     const csv = exportShortlistCsv([lead]);
 
-    expect(csv).toContain('Title,Source,Status,Quoted price,Size,Notes,URL,Saved at');
+    expect(csv).toContain('Title,Source,Status,Item price,Shipping / fees,Landed cost,Size,Notes,URL,Saved at');
     expect(csv).toContain('"""Wool, coat"""');
     expect(csv).toContain("'=1+1");
     expect(csv).toContain('"Seller says ""new"""');
@@ -94,10 +98,25 @@ describe('shortlist research workflow', () => {
     expect(input).toEqual([older, newer]);
   });
 
-  it('identifies the evidence still missing from a lead', () => {
+  it('identifies the evidence still missing from a lead and filters the research queue', () => {
     const lead = createSavedLead(result('Coat', 'https://shop.test/coat'));
-    expect(leadMissingFields(lead)).toEqual(['price', 'size', 'notes']);
-    expect(leadMissingFields({ ...lead, quotedPrice: '$80', size: 'M', notes: 'Returns accepted' })).toEqual([]);
+    const complete = { ...lead, quotedPrice: '$80', shippingCost: 'free', size: 'M', notes: 'Returns accepted' };
+    expect(leadMissingFields(lead)).toEqual(['price', 'shipping', 'size', 'notes']);
+    expect(leadMissingFields(complete)).toEqual([]);
+    expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'complete')).toEqual([complete]);
+    expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'incomplete')).toEqual([lead]);
+  });
+
+  it('calculates landed cost only from compatible, parseable amounts', () => {
+    expect(parseMoney('$1,299.50')).toEqual({ currency: '$', amount: 1299.5 });
+    expect(parseMoney('EUR 12,50')).toEqual({ currency: 'EUR', amount: 12.5 });
+    expect(parseMoney('EUR 1.234,56')).toEqual({ currency: 'EUR', amount: 1234.56 });
+    expect(parseMoney('free')).toEqual({ currency: '', amount: 0 });
+    expect(parseMoney('ask seller')).toBeNull();
+    expect(parseMoney('$80–$95')).toBeNull();
+    expect(landedCost({ quotedPrice: '$95', shippingCost: '$8.50' })).toEqual({ currency: '$', amount: 103.5 });
+    expect(formatLandedCost({ quotedPrice: '$95', shippingCost: 'included' })).toBe('$95.00');
+    expect(landedCost({ quotedPrice: 'USD 95', shippingCost: 'EUR 8' })).toBeNull();
   });
 
   it('maintains a bounded, unique comparison set containing only saved leads', () => {
@@ -117,7 +136,7 @@ describe('shortlist research workflow', () => {
     expect(restored.saved).toEqual([lead]);
     expect(restored.history).toEqual(history);
     expect(restored.comparisonUrls).toEqual([lead.url]);
-    expect(JSON.parse(backup)).toMatchObject({ product: 'ThreadHunt', version: 2, exportedAt: '2026-07-22T00:00:00.000Z' });
+    expect(JSON.parse(backup)).toMatchObject({ product: 'ThreadHunt', version: 3, exportedAt: '2026-07-22T00:00:00.000Z' });
   });
 
   it('rejects invalid backups and bounds imported history', () => {

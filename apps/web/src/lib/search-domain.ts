@@ -3,10 +3,12 @@ export type SortMode = 'relevance' | 'source' | 'title';
 export type LeadStatus = 'researching' | 'contender' | 'purchased';
 export type ShortlistFilter = 'all' | LeadStatus;
 export type ShortlistSort = 'newest' | 'title' | 'status';
+export type EvidenceFilter = 'all' | 'complete' | 'incomplete';
 export type SearchHistory = { query: string; region: string; at: string };
 export type SavedLead = SearchResult & {
   status: LeadStatus;
   quotedPrice: string;
+  shippingCost: string;
   size: string;
   notes: string;
   savedAt: string;
@@ -43,7 +45,7 @@ const LEAD_STATUSES = new Set<LeadStatus>(['researching', 'contender', 'purchase
 const text = (value: unknown, max: number) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 
 export function createSavedLead(result: SearchResult, savedAt = new Date().toISOString()): SavedLead {
-  return { ...result, status: 'researching', quotedPrice: '', size: '', notes: '', savedAt };
+  return { ...result, status: 'researching', quotedPrice: '', shippingCost: '', size: '', notes: '', savedAt };
 }
 
 export function normalizeSavedLeads(value: unknown, migratedAt = new Date().toISOString()): SavedLead[] {
@@ -63,6 +65,7 @@ export function normalizeSavedLeads(value: unknown, migratedAt = new Date().toIS
       title, source, snippet, url,
       status: typeof raw.status === 'string' && LEAD_STATUSES.has(raw.status as LeadStatus) ? raw.status as LeadStatus : 'researching',
       quotedPrice: text(raw.quotedPrice, 80),
+      shippingCost: text(raw.shippingCost, 80),
       size: text(raw.size, 80),
       notes: text(raw.notes, 1000),
       savedAt: typeof raw.savedAt === 'string' && Number.isFinite(Date.parse(raw.savedAt)) ? raw.savedAt : migratedAt,
@@ -95,8 +98,8 @@ function csvCell(value: string): string {
 }
 
 export function exportShortlistCsv(leads: SavedLead[]): string {
-  const rows = leads.map((lead) => [lead.title, lead.source, lead.status, lead.quotedPrice, lead.size, lead.notes, lead.url, lead.savedAt]);
-  return [['Title', 'Source', 'Status', 'Quoted price', 'Size', 'Notes', 'URL', 'Saved at'], ...rows]
+  const rows = leads.map((lead) => [lead.title, lead.source, lead.status, lead.quotedPrice, lead.shippingCost, formatLandedCost(lead), lead.size, lead.notes, lead.url, lead.savedAt]);
+  return [['Title', 'Source', 'Status', 'Item price', 'Shipping / fees', 'Landed cost', 'Size', 'Notes', 'URL', 'Saved at'], ...rows]
     .map((row) => row.map(csvCell).join(','))
     .join('\r\n');
 }
@@ -104,8 +107,9 @@ export function exportShortlistCsv(leads: SavedLead[]): string {
 const HISTORY_REGIONS = new Set(['global', 'US', 'EU', 'UK', 'Japan', 'China', 'Australia']);
 const STATUS_ORDER: Record<LeadStatus, number> = { contender: 0, researching: 1, purchased: 2 };
 
-export function filterAndSortSavedLeads(leads: SavedLead[], filter: ShortlistFilter, sort: ShortlistSort): SavedLead[] {
-  const filtered = filter === 'all' ? leads : leads.filter((lead) => lead.status === filter);
+export function filterAndSortSavedLeads(leads: SavedLead[], filter: ShortlistFilter, sort: ShortlistSort, evidence: EvidenceFilter = 'all'): SavedLead[] {
+  const filtered = leads.filter((lead) => (filter === 'all' || lead.status === filter)
+    && (evidence === 'all' || (leadMissingFields(lead).length === 0) === (evidence === 'complete')));
   return [...filtered].sort((a, b) => {
     if (sort === 'title') return a.title.localeCompare(b.title);
     if (sort === 'status') return STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.savedAt.localeCompare(a.savedAt);
@@ -113,12 +117,61 @@ export function filterAndSortSavedLeads(leads: SavedLead[], filter: ShortlistFil
   });
 }
 
-export function leadMissingFields(lead: SavedLead): Array<'price' | 'size' | 'notes'> {
-  const missing: Array<'price' | 'size' | 'notes'> = [];
+export function leadMissingFields(lead: SavedLead): Array<'price' | 'shipping' | 'size' | 'notes'> {
+  const missing: Array<'price' | 'shipping' | 'size' | 'notes'> = [];
   if (!lead.quotedPrice.trim()) missing.push('price');
+  if (!lead.shippingCost.trim()) missing.push('shipping');
   if (!lead.size.trim()) missing.push('size');
   if (!lead.notes.trim()) missing.push('notes');
   return missing;
+}
+
+export type MoneyAmount = { currency: string; amount: number };
+
+const CURRENCY_SYMBOLS = new Set(['$', '€', '£', '¥', '₹', '₩']);
+
+export function parseMoney(input: string): MoneyAmount | null {
+  const clean = input.trim();
+  if (!clean) return null;
+  if (/^(free|included|no charge)$/i.test(clean)) return { currency: '', amount: 0 };
+  const symbol = [...CURRENCY_SYMBOLS].find((entry) => clean.includes(entry));
+  const code = clean.match(/\b(USD|EUR|GBP|JPY|CNY|CAD|AUD|INR|KRW)\b/i)?.[1].toUpperCase();
+  const currency = code || symbol || '';
+  const matches = clean.match(/\d[\d.,]*/g);
+  if (!matches || matches.length !== 1 || /-\s*\d/.test(clean)) return null;
+  const numeric = matches[0];
+  const comma = numeric.lastIndexOf(',');
+  const dot = numeric.lastIndexOf('.');
+  let normalized = numeric;
+  if (comma >= 0 && dot >= 0) {
+    normalized = comma > dot
+      ? numeric.replace(/\./g, '').replace(',', '.')
+      : numeric.replace(/,/g, '');
+  } else if (comma >= 0) {
+    normalized = /,\d{1,2}$/.test(numeric) ? numeric.replace(',', '.') : numeric.replace(/,/g, '');
+  } else if (dot >= 0 && !/\.\d{1,2}$/.test(numeric)) {
+    normalized = numeric.replace(/\./g, '');
+  }
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? { currency, amount } : null;
+}
+
+export function landedCost(lead: Pick<SavedLead, 'quotedPrice' | 'shippingCost'>): MoneyAmount | null {
+  const item = parseMoney(lead.quotedPrice);
+  const shipping = parseMoney(lead.shippingCost);
+  if (!item || !shipping) return null;
+  if (item.currency && shipping.currency && item.currency !== shipping.currency) return null;
+  return { currency: item.currency || shipping.currency, amount: item.amount + shipping.amount };
+}
+
+export function formatLandedCost(lead: Pick<SavedLead, 'quotedPrice' | 'shippingCost'>): string {
+  const total = landedCost(lead);
+  if (!total) return '';
+  if (!total.currency) return total.amount.toFixed(2);
+  if (CURRENCY_SYMBOLS.has(total.currency)) return `${total.currency}${total.amount.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency: total.currency, maximumFractionDigits: total.currency === 'JPY' || total.currency === 'KRW' ? 0 : 2 }).format(total.amount);
+  } catch { return `${total.currency} ${total.amount.toFixed(2)}`; }
 }
 
 export function normalizeSearchHistory(value: unknown): SearchHistory[] {
@@ -141,7 +194,7 @@ export function normalizeSearchHistory(value: unknown): SearchHistory[] {
 
 export function exportWorkspaceBackup(saved: SavedLead[], history: SearchHistory[], comparisonUrls: string[] = [], exportedAt = new Date().toISOString()): string {
   const normalizedSaved = normalizeSavedLeads(saved, exportedAt);
-  return JSON.stringify({ product: 'ThreadHunt', version: 2, exportedAt, saved: normalizedSaved, history: normalizeSearchHistory(history), comparisonUrls: normalizeComparisonUrls(comparisonUrls, normalizedSaved) }, null, 2);
+  return JSON.stringify({ product: 'ThreadHunt', version: 3, exportedAt, saved: normalizedSaved, history: normalizeSearchHistory(history), comparisonUrls: normalizeComparisonUrls(comparisonUrls, normalizedSaved) }, null, 2);
 }
 
 export function parseWorkspaceBackup(input: string, importedAt = new Date().toISOString()): { saved: SavedLead[]; history: SearchHistory[]; comparisonUrls: string[] } {
@@ -149,9 +202,9 @@ export function parseWorkspaceBackup(input: string, importedAt = new Date().toIS
   try { value = JSON.parse(input); } catch { throw new Error('The selected backup is not valid JSON.'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The selected file is not a ThreadHunt workspace backup.');
   const backup = value as Record<string, unknown>;
-  if (backup.product !== 'ThreadHunt' || (backup.version !== 1 && backup.version !== 2)) throw new Error('The selected file is not a ThreadHunt workspace backup.');
+  if (backup.product !== 'ThreadHunt' || ![1, 2, 3].includes(backup.version as number)) throw new Error('The selected file is not a ThreadHunt workspace backup.');
   const saved = normalizeSavedLeads(backup.saved, importedAt);
-  return { saved, history: normalizeSearchHistory(backup.history), comparisonUrls: backup.version === 2 ? normalizeComparisonUrls(backup.comparisonUrls, saved) : [] };
+  return { saved, history: normalizeSearchHistory(backup.history), comparisonUrls: backup.version === 2 || backup.version === 3 ? normalizeComparisonUrls(backup.comparisonUrls, saved) : [] };
 }
 
 export function decodeDdgUrl(raw: string): string | null {

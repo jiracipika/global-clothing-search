@@ -24,11 +24,13 @@ button[aria-disabled="true"]{cursor:wait;opacity:.72}
 .statusPill.contender{background:#f2efc7;color:#5d5718}
 .statusPill.purchased{background:#dcefe5;color:#165b42}
 .removeLead{border:0;background:transparent;min-height:44px;padding:8px;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
-.researchFields{display:grid;grid-template-columns:minmax(150px,.8fr) minmax(150px,1fr) minmax(150px,1fr) minmax(260px,2fr);gap:12px;align-items:start}
+.researchFields{display:grid;grid-template-columns:minmax(145px,.75fr) repeat(3,minmax(145px,1fr));gap:12px;align-items:start}
 .researchFields input,.researchFields select,.researchFields textarea{width:100%;border:1px solid var(--line);background:#fbfbf8;padding:10px;min-height:44px;font:inherit}
 .researchFields textarea{resize:vertical;min-height:92px}
-.notesField{position:relative}
+.notesField{position:relative;grid-column:1/-1}
 .notesField small{position:absolute;inset-inline-end:8px;inset-block-end:7px;padding:1px 4px;background:#fbfbf8;color:var(--muted);font-size:9px}
+.landedSummary{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-top:12px;padding:10px 12px;background:#edf6f1;border-inline-start:3px solid var(--green)}
+.landedSummary span{color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.landedSummary strong,.landedValue{color:var(--green);font-variant-numeric:tabular-nums}
 .savedMeta{margin-top:12px}
 .emptySaved{display:grid;gap:5px;text-align:center;background:#f8f8f5;border:1px dashed var(--line);padding:30px}
 .workspaceNotice{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 16px;padding:12px 14px;border-left:4px solid var(--green);background:#eef5f1;color:#29463a;font-size:13px}
