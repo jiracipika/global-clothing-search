@@ -7,7 +7,8 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 - Search by item details, region, and optional price target; filter and sort returned leads.
 - Review per-source diagnostics when an upstream source is partially unavailable.
 - Save leads across searches into a browser-local decision workspace; record stage, quoted price, size/variant, and research notes.
-- Export the annotated shortlist as spreadsheet-safe CSV for offline comparison; legacy saved leads migrate automatically.
+- Triage larger shortlists by decision stage and priority, with visible evidence-completeness cues for fair comparison.
+- Export the annotated shortlist as spreadsheet-safe CSV, or back up and merge-restore the complete workspace as validated, versioned JSON; legacy saved leads migrate automatically.
 - Reuse local search history across research sessions.
 - Extract an image palette or four frames from an MP4/WebM/QuickTime video, then hand them to Lens, Bing, Yandex, or Pinterest. Uploaded files never leave the browser.
 - File controls validate explicit formats and limits (images 10 MB; videos 75 MB and 5 minutes).

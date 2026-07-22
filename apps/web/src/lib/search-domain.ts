@@ -1,6 +1,9 @@
 export type SearchResult = { title: string; url: string; snippet: string; source: string };
 export type SortMode = 'relevance' | 'source' | 'title';
 export type LeadStatus = 'researching' | 'contender' | 'purchased';
+export type ShortlistFilter = 'all' | LeadStatus;
+export type ShortlistSort = 'newest' | 'title' | 'status';
+export type SearchHistory = { query: string; region: string; at: string };
 export type SavedLead = SearchResult & {
   status: LeadStatus;
   quotedPrice: string;
@@ -77,6 +80,57 @@ export function exportShortlistCsv(leads: SavedLead[]): string {
   return [['Title', 'Source', 'Status', 'Quoted price', 'Size', 'Notes', 'URL', 'Saved at'], ...rows]
     .map((row) => row.map(csvCell).join(','))
     .join('\r\n');
+}
+
+const HISTORY_REGIONS = new Set(['global', 'US', 'EU', 'UK', 'Japan', 'China', 'Australia']);
+const STATUS_ORDER: Record<LeadStatus, number> = { contender: 0, researching: 1, purchased: 2 };
+
+export function filterAndSortSavedLeads(leads: SavedLead[], filter: ShortlistFilter, sort: ShortlistSort): SavedLead[] {
+  const filtered = filter === 'all' ? leads : leads.filter((lead) => lead.status === filter);
+  return [...filtered].sort((a, b) => {
+    if (sort === 'title') return a.title.localeCompare(b.title);
+    if (sort === 'status') return STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.savedAt.localeCompare(a.savedAt);
+    return b.savedAt.localeCompare(a.savedAt);
+  });
+}
+
+export function leadMissingFields(lead: SavedLead): Array<'price' | 'size' | 'notes'> {
+  const missing: Array<'price' | 'size' | 'notes'> = [];
+  if (!lead.quotedPrice.trim()) missing.push('price');
+  if (!lead.size.trim()) missing.push('size');
+  if (!lead.notes.trim()) missing.push('notes');
+  return missing;
+}
+
+export function normalizeSearchHistory(value: unknown): SearchHistory[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const history: SearchHistory[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const raw = entry as Record<string, unknown>;
+    const query = text(raw.query, 160);
+    const region = typeof raw.region === 'string' && HISTORY_REGIONS.has(raw.region) ? raw.region : 'global';
+    const at = typeof raw.at === 'string' && Number.isFinite(Date.parse(raw.at)) ? raw.at : '';
+    const key = `${query.toLowerCase()}\u0000${region}`;
+    if (!query || !at || seen.has(key)) continue;
+    seen.add(key);
+    history.push({ query, region, at });
+  }
+  return history.slice(0, 8);
+}
+
+export function exportWorkspaceBackup(saved: SavedLead[], history: SearchHistory[], exportedAt = new Date().toISOString()): string {
+  return JSON.stringify({ product: 'ThreadHunt', version: 1, exportedAt, saved: normalizeSavedLeads(saved, exportedAt), history: normalizeSearchHistory(history) }, null, 2);
+}
+
+export function parseWorkspaceBackup(input: string, importedAt = new Date().toISOString()): { saved: SavedLead[]; history: SearchHistory[] } {
+  let value: unknown;
+  try { value = JSON.parse(input); } catch { throw new Error('The selected backup is not valid JSON.'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The selected file is not a ThreadHunt workspace backup.');
+  const backup = value as Record<string, unknown>;
+  if (backup.product !== 'ThreadHunt' || backup.version !== 1) throw new Error('The selected file is not a ThreadHunt workspace backup.');
+  return { saved: normalizeSavedLeads(backup.saved, importedAt), history: normalizeSearchHistory(backup.history) };
 }
 
 export function decodeDdgUrl(raw: string): string | null {

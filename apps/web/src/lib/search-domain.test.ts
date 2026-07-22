@@ -4,10 +4,14 @@ import {
   decodeDdgUrl,
   decodeHtml,
   exportShortlistCsv,
+  exportWorkspaceBackup,
   filterAndSort,
+  filterAndSortSavedLeads,
+  leadMissingFields,
   mergeResults,
   normalizeSavedLeads,
   parseDdgHtml,
+  parseWorkspaceBackup,
   safePublicUrl,
   type SearchResult,
 } from './search-domain';
@@ -75,5 +79,40 @@ describe('shortlist research workflow', () => {
     expect(csv).toContain('"""Wool, coat"""');
     expect(csv).toContain("'=1+1");
     expect(csv).toContain('"Seller says ""new"""');
+  });
+
+  it('filters and sorts the decision queue without mutating saved order', () => {
+    const older = { ...createSavedLead(result('Zebra coat', 'https://shop.test/z'), '2026-07-20T00:00:00.000Z'), status: 'contender' as const };
+    const newer = createSavedLead(result('Alpha coat', 'https://shop.test/a'), '2026-07-22T00:00:00.000Z');
+    const input = [older, newer];
+
+    expect(filterAndSortSavedLeads(input, 'contender', 'newest')).toEqual([older]);
+    expect(filterAndSortSavedLeads(input, 'all', 'title').map((lead) => lead.title)).toEqual(['Alpha coat', 'Zebra coat']);
+    expect(filterAndSortSavedLeads(input, 'all', 'newest').map((lead) => lead.title)).toEqual(['Alpha coat', 'Zebra coat']);
+    expect(input).toEqual([older, newer]);
+  });
+
+  it('identifies the evidence still missing from a lead', () => {
+    const lead = createSavedLead(result('Coat', 'https://shop.test/coat'));
+    expect(leadMissingFields(lead)).toEqual(['price', 'size', 'notes']);
+    expect(leadMissingFields({ ...lead, quotedPrice: '$80', size: 'M', notes: 'Returns accepted' })).toEqual([]);
+  });
+
+  it('round-trips a versioned portable workspace backup', () => {
+    const lead = { ...createSavedLead(result('Coat', 'https://shop.test/coat'), '2026-07-21T00:00:00.000Z'), notes: 'Check measurements' };
+    const history = [{ query: 'wool coat', region: 'UK', at: '2026-07-21T10:00:00.000Z' }];
+    const backup = exportWorkspaceBackup([lead], history, '2026-07-22T00:00:00.000Z');
+    const restored = parseWorkspaceBackup(backup, '2026-07-22T00:00:00.000Z');
+
+    expect(restored.saved).toEqual([lead]);
+    expect(restored.history).toEqual(history);
+    expect(JSON.parse(backup)).toMatchObject({ product: 'ThreadHunt', version: 1, exportedAt: '2026-07-22T00:00:00.000Z' });
+  });
+
+  it('rejects invalid backups and bounds imported history', () => {
+    expect(() => parseWorkspaceBackup('{"product":"Other","version":1}')).toThrow('not a ThreadHunt workspace backup');
+    expect(() => parseWorkspaceBackup('not json')).toThrow('valid JSON');
+    const backup = JSON.stringify({ product: 'ThreadHunt', version: 1, saved: [], history: Array.from({ length: 20 }, (_, index) => ({ query: `coat ${index}`, region: 'global', at: '2026-07-21T10:00:00.000Z' })) });
+    expect(parseWorkspaceBackup(backup).history).toHaveLength(8);
   });
 });

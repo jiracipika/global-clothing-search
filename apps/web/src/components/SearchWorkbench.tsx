@@ -7,18 +7,25 @@ import { exampleQueries, type Market } from '@/lib/markets';
 import {
   createSavedLead,
   exportShortlistCsv,
+  exportWorkspaceBackup,
   filterAndSort,
+  filterAndSortSavedLeads,
+  leadMissingFields,
   normalizeSavedLeads,
+  normalizeSearchHistory,
+  parseWorkspaceBackup,
   type LeadStatus,
   type SavedLead,
+  type SearchHistory,
   type SearchResult,
+  type ShortlistFilter,
+  type ShortlistSort,
   type SortMode,
 } from '@/lib/search-domain';
 
 type Diagnostic = { source: string; status: 'ok' | 'unavailable'; count: number };
 type SearchResponse = { query: string; results: SearchResult[]; markets: Market[]; caveats: string[]; freeSources: string[]; generatedAt: string; diagnostics: Diagnostic[] };
 type Frame = { url: string; at: number };
-type History = { query: string; region: string; at: string };
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime'];
 const load = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) || '') as T; } catch { return fallback; } };
@@ -34,16 +41,18 @@ export default function SearchWorkbench() {
   const [data, setData] = useState<SearchResponse | null>(null); const [loading, setLoading] = useState(false);
   const [error, setError] = useState(''); const [mediaError, setMediaError] = useState('');
   const [resultFilter, setResultFilter] = useState(''); const [sort, setSort] = useState<SortMode>('relevance');
-  const [saved, setSaved] = useState<SavedLead[]>([]); const [history, setHistory] = useState<History[]>([]); const [ready, setReady] = useState(false);
+  const [saved, setSaved] = useState<SavedLead[]>([]); const [history, setHistory] = useState<SearchHistory[]>([]); const [ready, setReady] = useState(false);
   const [shortlistMessage, setShortlistMessage] = useState('');
-  const fileInput = useRef<HTMLInputElement>(null); const videoInput = useRef<HTMLInputElement>(null); const previewRef = useRef('');
+  const [shortlistFilter, setShortlistFilter] = useState<ShortlistFilter>('all'); const [shortlistSort, setShortlistSort] = useState<ShortlistSort>('newest');
+  const [lastCleared, setLastCleared] = useState<SavedLead[] | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null); const videoInput = useRef<HTMLInputElement>(null); const backupInput = useRef<HTMLInputElement>(null); const previewRef = useRef('');
 
   useEffect(() => {
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
       setSaved(normalizeSavedLeads(load<unknown>('threadhunt:saved', [])));
-      setHistory(load('threadhunt:history', []));
+      setHistory(normalizeSearchHistory(load<unknown>('threadhunt:history', [])));
       setReady(true);
     });
     return () => { active = false; };
@@ -53,6 +62,8 @@ export default function SearchWorkbench() {
   useEffect(() => () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current); }, []);
 
   const shown = useMemo(() => filterAndSort(data?.results || [], resultFilter, sort), [data, resultFilter, sort]);
+  const shownSaved = useMemo(() => filterAndSortSavedLeads(saved, shortlistFilter, shortlistSort), [saved, shortlistFilter, shortlistSort]);
+  const readyToCompare = useMemo(() => saved.filter((lead) => leadMissingFields(lead).length === 0).length, [saved]);
   const visualLinks = useMemo(() => [
     ['Google Lens', googleLensUrl(imageUrl), imageUrl ? 'Open the public image URL directly' : 'Upload or paste an image there'],
     ['Bing Visual Search', 'https://www.bing.com/visualsearch', 'Upload an image or extracted frame'],
@@ -100,6 +111,7 @@ export default function SearchWorkbench() {
     } catch { setMediaError('Could not process this video. Use MP4/WebM under 5 minutes.'); } finally { video.removeAttribute('src'); video.load(); URL.revokeObjectURL(url); }
   }
   function toggleSaved(item: SearchResult) {
+    setLastCleared(null);
     setSaved((old) => old.some((lead) => lead.url === item.url)
       ? old.filter((lead) => lead.url !== item.url)
       : [...old, createSavedLead(item)]);
@@ -107,13 +119,42 @@ export default function SearchWorkbench() {
   function updateSaved(url: string, patch: Partial<Pick<SavedLead, 'status' | 'quotedPrice' | 'size' | 'notes'>>) {
     setSaved((old) => old.map((lead) => lead.url === url ? { ...lead, ...patch } : lead));
   }
-  function downloadShortlist() {
-    const blobUrl = URL.createObjectURL(new Blob(['\uFEFF', exportShortlistCsv(saved)], { type: 'text/csv;charset=utf-8' }));
+  function downloadText(contents: BlobPart[], type: string, filename: string) {
+    const blobUrl = URL.createObjectURL(new Blob(contents, { type }));
     const link = document.createElement('a');
-    link.href = blobUrl; link.download = `threadhunt-shortlist-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.href = blobUrl; link.download = filename;
     document.body.append(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+  }
+  function downloadShortlist() {
+    downloadText(['\uFEFF', exportShortlistCsv(saved)], 'text/csv;charset=utf-8', `threadhunt-shortlist-${new Date().toISOString().slice(0, 10)}.csv`);
     setShortlistMessage(`Exported ${saved.length} ${saved.length === 1 ? 'lead' : 'leads'} as CSV.`);
+  }
+  function downloadBackup() {
+    downloadText([exportWorkspaceBackup(saved, history)], 'application/json;charset=utf-8', `threadhunt-workspace-${new Date().toISOString().slice(0, 10)}.json`);
+    setShortlistMessage(`Backed up ${saved.length} leads and ${history.length} recent searches.`);
+  }
+  async function restoreBackup(file: File) {
+    if (file.size > 1024 * 1024) { setShortlistMessage('Backup must be 1 MB or smaller.'); if (backupInput.current) backupInput.current.value = ''; return; }
+    try {
+      const restored = parseWorkspaceBackup(await file.text());
+      setSaved((current) => normalizeSavedLeads([...restored.saved, ...current]));
+      setHistory((current) => normalizeSearchHistory([...restored.history, ...current]));
+      setLastCleared(null);
+      setShortlistMessage(`Restored ${restored.saved.length} leads and ${restored.history.length} recent searches. Existing unique items were kept.`);
+    } catch (restoreError) {
+      setShortlistMessage(restoreError instanceof Error ? restoreError.message : 'Could not restore this backup.');
+    } finally {
+      if (backupInput.current) backupInput.current.value = '';
+    }
+  }
+  function clearShortlist() {
+    if (!window.confirm(`Clear all ${saved.length} saved leads? You can undo this until you change the shortlist.`)) return;
+    setLastCleared(saved); setSaved([]); setShortlistMessage(`Cleared ${saved.length} leads.`);
+  }
+  function undoClear() {
+    if (!lastCleared) return;
+    setSaved(lastCleared); setShortlistMessage(`Restored ${lastCleared.length} leads.`); setLastCleared(null);
   }
 
   return <>
@@ -141,32 +182,47 @@ export default function SearchWorkbench() {
     <section className="panel shortlist" id="shortlist" aria-describedby="shortlist-help">
       <div className="sectionTitle shortlistTitle">
         <div><p className="step">04 / Comparison shortlist</p><h2>Decision workspace</h2></div>
-        {saved.length > 0 && <div className="shortlistActions"><button type="button" className="quiet" onClick={downloadShortlist}>Export CSV ↓</button><button type="button" className="quiet danger" onClick={() => { setSaved([]); setShortlistMessage('Shortlist cleared.'); }}>Clear all</button></div>}
+        <div className="shortlistActions">
+          <input ref={backupInput} hidden type="file" accept="application/json,.json" onChange={(event) => event.target.files?.[0] && void restoreBackup(event.target.files[0])} />
+          <button type="button" className="quiet" onClick={downloadBackup}>Backup JSON ↓</button>
+          <button type="button" className="quiet" onClick={() => backupInput.current?.click()}>Restore backup ↑</button>
+          {saved.length > 0 && <><button type="button" className="quiet" onClick={downloadShortlist}>Export CSV ↓</button><button type="button" className="quiet danger" onClick={clearShortlist}>Clear all</button></>}
+        </div>
       </div>
-      <p id="shortlist-help" className="muted shortlistHelp">Record the listed price, available size, and evidence you still need. Every edit is saved in this browser and included in the CSV export.</p>
-      <p className="srOnly" role="status" aria-live="polite">{shortlistMessage}</p>
+      <p id="shortlist-help" className="muted shortlistHelp">Capture price, size, and verification notes before deciding. Filter the queue as it grows, export a spreadsheet for analysis, or back up the complete local workspace as JSON.</p>
+      {shortlistMessage && <div className="workspaceNotice" role="status" aria-live="polite"><span>{shortlistMessage}</span>{lastCleared && <button type="button" onClick={undoClear}>Undo clear</button>}</div>}
       {saved.length ? <>
         <div className="shortlistSummary" aria-label="Shortlist progress">
           <span><b>{saved.length}</b> saved</span>
           <span><b>{saved.filter((lead) => lead.status === 'contender').length}</b> contenders</span>
+          <span><b>{readyToCompare}</b> evidence complete</span>
           <span><b>{saved.filter((lead) => lead.status === 'purchased').length}</b> purchased</span>
         </div>
-        <div className="researchList">
-          {saved.map((lead, index) => <article className="researchCard" key={lead.url}>
-            <div className="researchCardHead">
-              <div><span className={`statusPill ${lead.status}`}>{lead.status}</span><h3><a href={lead.url} target="_blank" rel="noopener noreferrer">{lead.title} ↗</a></h3><p>{lead.source}</p></div>
-              <button type="button" className="removeLead" onClick={() => toggleSaved(lead)} aria-label={`Remove ${lead.title} from shortlist`}>Remove</button>
-            </div>
-            <div className="researchFields">
-              <div><label htmlFor={`lead-status-${index}`}>Decision stage</label><select id={`lead-status-${index}`} value={lead.status} onChange={(event) => updateSaved(lead.url, { status: event.target.value as LeadStatus })}><option value="researching">Researching</option><option value="contender">Contender</option><option value="purchased">Purchased</option></select></div>
-              <div><label htmlFor={`lead-price-${index}`}>Quoted price</label><input id={`lead-price-${index}`} maxLength={80} value={lead.quotedPrice} onChange={(event) => updateSaved(lead.url, { quotedPrice: event.target.value })} placeholder="$95 shipped" /></div>
-              <div><label htmlFor={`lead-size-${index}`}>Size / variant</label><input id={`lead-size-${index}`} maxLength={80} value={lead.size} onChange={(event) => updateSaved(lead.url, { size: event.target.value })} placeholder="M · black" /></div>
-              <div className="notesField"><label htmlFor={`lead-notes-${index}`}>Research notes</label><textarea id={`lead-notes-${index}`} maxLength={1000} value={lead.notes} onChange={(event) => updateSaved(lead.url, { notes: event.target.value })} placeholder="Returns, condition, measurements, seller questions…" /><small>{lead.notes.length}/1000</small></div>
-            </div>
-            <p className="savedMeta">Saved {new Date(lead.savedAt).toLocaleDateString([], { dateStyle: 'medium' })}</p>
-          </article>)}
+        <div className="queueTools" aria-label="Decision queue controls">
+          <div><label htmlFor="shortlist-filter">Show stage</label><select id="shortlist-filter" value={shortlistFilter} onChange={(event) => setShortlistFilter(event.target.value as ShortlistFilter)}><option value="all">All stages ({saved.length})</option><option value="researching">Researching</option><option value="contender">Contenders</option><option value="purchased">Purchased</option></select></div>
+          <div><label htmlFor="shortlist-sort">Order by</label><select id="shortlist-sort" value={shortlistSort} onChange={(event) => setShortlistSort(event.target.value as ShortlistSort)}><option value="newest">Newest saved</option><option value="status">Decision priority</option><option value="title">Title A–Z</option></select></div>
+          <p><b>{shownSaved.length}</b> {shownSaved.length === 1 ? 'lead' : 'leads'} in this view</p>
         </div>
-      </> : <div className="emptySaved"><b>Your shortlist is empty.</b><span>Save promising leads, then annotate and compare them here across searches.</span></div>}
+        {shownSaved.length > 0 ? <div className="researchList">
+          {shownSaved.map((lead, index) => {
+            const missing = leadMissingFields(lead);
+            return <article className="researchCard" key={lead.url}>
+              <div className="researchCardHead">
+                <div><span className={`statusPill ${lead.status}`}>{lead.status}</span><h3><a href={lead.url} target="_blank" rel="noopener noreferrer">{lead.title} ↗</a></h3><p>{lead.source}</p></div>
+                <button type="button" className="removeLead" onClick={() => toggleSaved(lead)} aria-label={`Remove ${lead.title} from shortlist`}>Remove</button>
+              </div>
+              <div className={`evidenceStatus ${missing.length === 0 ? 'complete' : ''}`}><strong>{missing.length === 0 ? 'Evidence complete' : `${missing.length} ${missing.length === 1 ? 'detail' : 'details'} needed`}</strong><span>{missing.length === 0 ? 'Ready for a like-for-like decision.' : `Add ${missing.join(', ')} before comparing.`}</span></div>
+              <div className="researchFields">
+                <div><label htmlFor={`lead-status-${index}`}>Decision stage</label><select id={`lead-status-${index}`} value={lead.status} onChange={(event) => updateSaved(lead.url, { status: event.target.value as LeadStatus })}><option value="researching">Researching</option><option value="contender">Contender</option><option value="purchased">Purchased</option></select></div>
+                <div><label htmlFor={`lead-price-${index}`}>Quoted price</label><input id={`lead-price-${index}`} maxLength={80} value={lead.quotedPrice} onChange={(event) => updateSaved(lead.url, { quotedPrice: event.target.value })} placeholder="$95 shipped" /></div>
+                <div><label htmlFor={`lead-size-${index}`}>Size / variant</label><input id={`lead-size-${index}`} maxLength={80} value={lead.size} onChange={(event) => updateSaved(lead.url, { size: event.target.value })} placeholder="M · black" /></div>
+                <div className="notesField"><label htmlFor={`lead-notes-${index}`}>Research notes</label><textarea id={`lead-notes-${index}`} maxLength={1000} value={lead.notes} onChange={(event) => updateSaved(lead.url, { notes: event.target.value })} placeholder="Returns, condition, measurements, seller questions…" /><small>{lead.notes.length}/1000</small></div>
+              </div>
+              <p className="savedMeta">Saved {new Date(lead.savedAt).toLocaleDateString([], { dateStyle: 'medium' })}</p>
+            </article>;
+          })}
+        </div> : <div className="emptySaved"><b>No leads in this stage.</b><span>Choose another stage or update a lead’s decision stage.</span><button type="button" className="quiet" onClick={() => setShortlistFilter('all')}>Show all leads</button></div>}
+      </> : <div className="emptySaved"><b>Your shortlist is empty.</b><span>Save promising leads, then annotate and compare them here across searches. You can also restore a previous JSON backup.</span></div>}
     </section>
     <footer><b>ThreadHunt</b><span>Open-source shopping research · No affiliate links</span></footer>
     </main>
