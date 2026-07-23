@@ -8,6 +8,7 @@ import {
   filterAndSort,
   filterAndSortSavedLeads,
   formatLandedCost,
+  isLeadVerificationStale,
   landedCost,
   leadMissingFields,
   mergeResults,
@@ -50,6 +51,9 @@ describe('shortlist research workflow', () => {
       size: '',
       condition: '',
       returnPolicy: '',
+      seller: '',
+      listingStatus: '',
+      checkedAt: '',
       notes: '',
       savedAt: '2026-07-22T00:00:00.000Z',
     });
@@ -71,24 +75,26 @@ describe('shortlist research workflow', () => {
   it('preserves valid research fields while bounding user-entered text', () => {
     const saved = normalizeSavedLeads([{
       ...result('Coat', 'https://shop.test/coat'),
-      status: 'contender', quotedPrice: '$120', shippingCost: 'free', size: 'M', condition: 'New with tags', returnPolicy: 'accepted', notes: 'x'.repeat(1200), savedAt: '2026-07-21T00:00:00.000Z',
+      status: 'contender', quotedPrice: '$120', shippingCost: 'free', size: 'M', condition: 'New with tags', returnPolicy: 'accepted', seller: '  Studio seller  ', listingStatus: 'available', checkedAt: '2026-07-22T00:00:00.000Z', notes: 'x'.repeat(1200), savedAt: '2026-07-21T00:00:00.000Z',
     }]);
 
     expect(saved[0].status).toBe('contender');
     expect(saved[0].quotedPrice).toBe('$120');
     expect(saved[0].condition).toBe('New with tags');
     expect(saved[0].returnPolicy).toBe('accepted');
+    expect(saved[0]).toMatchObject({ seller: 'Studio seller', listingStatus: 'available', checkedAt: '2026-07-22T00:00:00.000Z' });
     expect(saved[0].notes).toHaveLength(1000);
   });
 
   it('exports spreadsheet-safe CSV with research context', () => {
-    const lead = { ...createSavedLead(result('"Wool, coat"', 'https://shop.test/coat'), '2026-07-22T00:00:00.000Z'), status: 'contender' as const, quotedPrice: '=1+1', shippingCost: '+$8', size: 'M', condition: 'Used, excellent', returnPolicy: 'final-sale' as const, notes: 'Seller says "new"' };
+    const lead = { ...createSavedLead(result('"Wool, coat"', 'https://shop.test/coat'), '2026-07-22T00:00:00.000Z'), status: 'contender' as const, quotedPrice: '=1+1', shippingCost: '+$8', size: 'M', condition: 'Used, excellent', returnPolicy: 'final-sale' as const, seller: '@trusted-shop', listingStatus: 'available' as const, checkedAt: '2026-07-22T12:00:00.000Z', notes: 'Seller says "new"' };
     const csv = exportShortlistCsv([lead]);
 
-    expect(csv).toContain('Title,Source,Status,Item price,Shipping / fees,Landed cost,Size / variant,Condition,Returns / protection,Notes,URL,Saved at');
+    expect(csv).toContain('Title,Source,Status,Item price,Shipping / fees,Landed cost,Size / variant,Condition,Returns / protection,Seller,Listing status,Last verified,Notes,URL,Saved at');
     expect(csv).toContain('"""Wool, coat"""');
     expect(csv).toContain("'=1+1");
     expect(csv).toContain('"Used, excellent",Final sale');
+    expect(csv).toContain("'@trusted-shop,Available,2026-07-22T12:00:00.000Z");
     expect(csv).toContain('"Seller says ""new"""');
   });
 
@@ -105,11 +111,27 @@ describe('shortlist research workflow', () => {
 
   it('identifies the evidence still missing from a lead and filters the research queue', () => {
     const lead = createSavedLead(result('Coat', 'https://shop.test/coat'));
-    const complete = { ...lead, quotedPrice: '$80', shippingCost: 'free', size: 'M', condition: 'New', returnPolicy: 'accepted' as const, notes: 'Seller measurements checked' };
-    expect(leadMissingFields(lead)).toEqual(['price', 'shipping', 'size', 'condition', 'returns', 'notes']);
-    expect(leadMissingFields(complete)).toEqual([]);
-    expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'complete')).toEqual([complete]);
-    expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'incomplete')).toEqual([lead]);
+    const now = new Date('2026-07-23T00:00:00.000Z');
+    const complete = { ...lead, quotedPrice: '$80', shippingCost: 'free', size: 'M', condition: 'New', returnPolicy: 'accepted' as const, seller: 'Seller 42', listingStatus: 'available' as const, checkedAt: '2026-07-22T00:00:00.000Z', notes: 'Seller measurements checked' };
+    expect(leadMissingFields(lead, now)).toEqual(['price', 'shipping', 'size', 'condition', 'returns', 'seller', 'availability', 'notes']);
+    expect(leadMissingFields(complete, now)).toEqual([]);
+    expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'complete', now)).toEqual([complete]);
+    expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'incomplete', now)).toEqual([lead]);
+  });
+
+  it('surfaces stale listing verification separately from other missing evidence', () => {
+    const now = new Date('2026-07-23T00:00:00.000Z');
+    const fresh = { ...createSavedLead(result('Fresh', 'https://shop.test/fresh')), listingStatus: 'available' as const, checkedAt: '2026-07-16T00:00:01.000Z' };
+    const stale = { ...createSavedLead(result('Stale', 'https://shop.test/stale')), listingStatus: 'available' as const, checkedAt: '2026-07-15T23:59:59.000Z' };
+    const missingStatus = { ...createSavedLead(result('Missing status', 'https://shop.test/missing')), checkedAt: '2026-07-22T00:00:00.000Z' };
+    const futureDated = { ...createSavedLead(result('Future', 'https://shop.test/future')), listingStatus: 'available' as const, checkedAt: '2026-07-24T00:00:00.000Z' };
+    const purchased = { ...stale, status: 'purchased' as const };
+    expect(isLeadVerificationStale(fresh, now)).toBe(false);
+    expect(isLeadVerificationStale(stale, now)).toBe(true);
+    expect(isLeadVerificationStale(missingStatus, now)).toBe(true);
+    expect(isLeadVerificationStale(futureDated, now)).toBe(true);
+    expect(isLeadVerificationStale(purchased, now)).toBe(false);
+    expect(filterAndSortSavedLeads([fresh, stale, missingStatus, futureDated, purchased], 'all', 'newest', 'stale', now)).toEqual([stale, missingStatus, futureDated]);
   });
 
   it('calculates landed cost only from compatible, parseable amounts', () => {
@@ -141,7 +163,7 @@ describe('shortlist research workflow', () => {
     expect(restored.saved).toEqual([lead]);
     expect(restored.history).toEqual(history);
     expect(restored.comparisonUrls).toEqual([lead.url]);
-    expect(JSON.parse(backup)).toMatchObject({ product: 'ThreadHunt', version: 4, exportedAt: '2026-07-22T00:00:00.000Z' });
+    expect(JSON.parse(backup)).toMatchObject({ product: 'ThreadHunt', version: 5, exportedAt: '2026-07-22T00:00:00.000Z' });
   });
 
   it('rejects invalid backups and bounds imported history', () => {
@@ -162,5 +184,15 @@ describe('shortlist research workflow', () => {
     const restored = parseWorkspaceBackup(legacy);
     expect(restored.comparisonUrls).toEqual([url]);
     expect(restored.saved[0]).toMatchObject({ condition: '', returnPolicy: '' });
+  });
+
+  it('migrates version 4 backups to listing-verification defaults', () => {
+    const legacy = JSON.stringify({ product: 'ThreadHunt', version: 4, saved: [result('Coat', 'https://shop.test/coat')], history: [], comparisonUrls: [] });
+    expect(parseWorkspaceBackup(legacy).saved[0]).toMatchObject({ seller: '', listingStatus: '', checkedAt: '' });
+  });
+
+  it('drops verification dates that are not paired with a valid listing status', () => {
+    const malformed = { ...result('Coat', 'https://shop.test/coat'), listingStatus: 'unknown', checkedAt: '2026-07-22T00:00:00.000Z' };
+    expect(normalizeSavedLeads([malformed])[0]).toMatchObject({ listingStatus: '', checkedAt: '' });
   });
 });

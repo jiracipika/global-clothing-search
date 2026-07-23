@@ -6,11 +6,11 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 
 - Search by item details, region, and optional price target; filter and sort returned leads.
 - Review per-source diagnostics when an upstream source is partially unavailable.
-- Save leads across searches into a browser-local decision workspace; record stage, item price, shipping/fees, size/variant, condition, returns/buyer protection, and research notes.
+- Save leads across searches into a browser-local decision workspace; record stage, item price, shipping/fees, size/variant, condition, returns/buyer protection, seller, current listing status, and research notes.
 - See a landed-cost total when item and shipping amounts use compatible currencies; free/included shipping is supported.
-- Triage larger shortlists by decision stage and purchase-risk evidence completeness, with dedicated “needs research” and “evidence complete” views.
-- Select two to four leads for a durable, accessible side-by-side evidence table covering stage, item price, shipping, landed cost, variant, condition, return protection, completeness, and notes.
-- Export the annotated shortlist—including landed-cost columns—as spreadsheet-safe CSV, or back up and merge-restore the complete workspace—including comparison picks—as validated, versioned JSON; older backups and legacy saved leads migrate automatically.
+- Triage larger shortlists by decision stage and purchase-risk evidence completeness, with dedicated “needs research,” “evidence complete,” and “needs availability recheck” views. Listing checks expire after seven days; purchased leads are excluded from recheck reminders.
+- Select two to four leads for a durable, accessible side-by-side evidence table covering stage, item price, shipping, landed cost, variant, condition, return protection, seller, listing availability, verification date, completeness, and notes.
+- Export the annotated shortlist—including landed-cost and listing-verification columns—as spreadsheet-safe CSV, or back up and merge-restore the complete workspace—including comparison picks—as validated, versioned JSON; older backups and legacy saved leads migrate automatically.
 - Reuse local search history across research sessions.
 - Extract an image palette or four frames from an MP4/WebM/QuickTime video, then hand them to Lens, Bing, Yandex, or Pinterest. Uploaded files never leave the browser.
 - File controls validate explicit formats and limits (images 10 MB; videos 75 MB and 5 minutes).

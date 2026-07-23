@@ -11,7 +11,9 @@ import {
   filterAndSort,
   formatLandedCost,
   filterAndSortSavedLeads,
+  isLeadVerificationStale,
   leadMissingFields,
+  listingStatusLabel,
   MAX_COMPARISON_LEADS,
   normalizeComparisonUrls,
   normalizeSavedLeads,
@@ -21,6 +23,7 @@ import {
   toggleComparisonUrl,
   type EvidenceFilter,
   type LeadStatus,
+  type ListingStatus,
   type ReturnPolicy,
   type SavedLead,
   type SearchHistory,
@@ -39,6 +42,9 @@ const load = <T,>(key: string, fallback: T): T => { try { return JSON.parse(loca
 
 function host(url: string) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } }
 function googleLensUrl(imageUrl: string) { try { const u = new URL(imageUrl); return /^https?:$/.test(u.protocol) ? `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(u.toString())}` : 'https://lens.google.com/'; } catch { return 'https://lens.google.com/'; } }
+const missingFieldLabels: Record<ReturnType<typeof leadMissingFields>[number], string> = {
+  price: 'item price', shipping: 'shipping or fees', size: 'size or variant', condition: 'condition', returns: 'return protection', seller: 'seller', availability: 'current availability', freshness: 'a fresh availability check', notes: 'research notes',
+};
 
 export default function SearchWorkbench() {
   const [query, setQuery] = useState('black ribbed cropped cardigan');
@@ -78,6 +84,7 @@ export default function SearchWorkbench() {
   const shownSaved = useMemo(() => filterAndSortSavedLeads(saved, shortlistFilter, shortlistSort, evidenceFilter), [saved, shortlistFilter, shortlistSort, evidenceFilter]);
   const comparedLeads = useMemo(() => comparisonUrls.flatMap((url) => { const lead = saved.find((item) => item.url === url); return lead ? [lead] : []; }), [comparisonUrls, saved]);
   const readyToCompare = useMemo(() => saved.filter((lead) => leadMissingFields(lead).length === 0).length, [saved]);
+  const staleVerificationCount = useMemo(() => saved.filter((lead) => isLeadVerificationStale(lead)).length, [saved]);
   const visualLinks = useMemo(() => [
     ['Google Lens', googleLensUrl(imageUrl), imageUrl ? 'Open the public image URL directly' : 'Upload or paste an image there'],
     ['Bing Visual Search', 'https://www.bing.com/visualsearch', 'Upload an image or extracted frame'],
@@ -135,8 +142,12 @@ export default function SearchWorkbench() {
     setComparisonUrls((current) => toggleComparisonUrl(current, url, saved));
     setShortlistMessage(atLimit ? `Compare up to ${MAX_COMPARISON_LEADS} leads at a time. Remove one before adding another.` : '');
   }
-  function updateSaved(url: string, patch: Partial<Pick<SavedLead, 'status' | 'quotedPrice' | 'shippingCost' | 'size' | 'condition' | 'returnPolicy' | 'notes'>>) {
+  function updateSaved(url: string, patch: Partial<Pick<SavedLead, 'status' | 'quotedPrice' | 'shippingCost' | 'size' | 'condition' | 'returnPolicy' | 'seller' | 'listingStatus' | 'checkedAt' | 'notes'>>) {
     setSaved((old) => old.map((lead) => lead.url === url ? { ...lead, ...patch } : lead));
+  }
+  function verifyListing(url: string, listingStatus: ListingStatus) {
+    updateSaved(url, { listingStatus, checkedAt: listingStatus ? new Date().toISOString() : '' });
+    setShortlistMessage(listingStatus ? 'Listing availability marked as checked now.' : 'Listing verification cleared.');
   }
   function downloadText(contents: BlobPart[], type: string, filename: string) {
     const blobUrl = URL.createObjectURL(new Blob(contents, { type }));
@@ -210,18 +221,19 @@ export default function SearchWorkbench() {
           {saved.length > 0 && <><button type="button" className="quiet" onClick={downloadShortlist}>Export CSV ↓</button><button type="button" className="quiet danger" onClick={clearShortlist}>Clear all</button></>}
         </div>
       </div>
-      <p id="shortlist-help" className="muted shortlistHelp">Capture item price, shipping and fees, size, condition, return protection, and verification notes before deciding. ThreadHunt calculates landed cost only when both cost fields are parseable in the same currency. Filter the queue as it grows, export a spreadsheet for analysis, or back up the complete local workspace as JSON.</p>
+      <p id="shortlist-help" className="muted shortlistHelp">Capture item price, shipping and fees, size, condition, return protection, seller identity, current availability, and verification notes before deciding. Availability checks expire after seven days; purchased leads leave the recheck queue. ThreadHunt calculates landed cost only when both cost fields are parseable in the same currency. Filter the queue as it grows, export a spreadsheet for analysis, or back up the complete local workspace as JSON.</p>
       {shortlistMessage && <div className="workspaceNotice" role="status" aria-live="polite"><span>{shortlistMessage}</span>{lastCleared && <button type="button" onClick={undoClear}>Undo clear</button>}</div>}
       {saved.length ? <>
         <div className="shortlistSummary" aria-label="Shortlist progress">
           <span><b>{saved.length}</b> saved</span>
           <span><b>{saved.filter((lead) => lead.status === 'contender').length}</b> contenders</span>
           <span><b>{readyToCompare}</b> evidence complete</span>
+          <span className={staleVerificationCount ? 'summaryAttention' : ''}><b>{staleVerificationCount}</b> need rechecking</span>
           <span><b>{saved.filter((lead) => lead.status === 'purchased').length}</b> purchased</span>
         </div>
         <div className="queueTools" aria-label="Decision queue controls">
           <div><label htmlFor="shortlist-filter">Show stage</label><select id="shortlist-filter" value={shortlistFilter} onChange={(event) => setShortlistFilter(event.target.value as ShortlistFilter)}><option value="all">All stages ({saved.length})</option><option value="researching">Researching</option><option value="contender">Contenders</option><option value="purchased">Purchased</option></select></div>
-          <div><label htmlFor="evidence-filter">Evidence</label><select id="evidence-filter" value={evidenceFilter} onChange={(event) => setEvidenceFilter(event.target.value as EvidenceFilter)}><option value="all">Any completeness</option><option value="incomplete">Needs research</option><option value="complete">Evidence complete</option></select></div>
+          <div><label htmlFor="evidence-filter">Evidence</label><select id="evidence-filter" value={evidenceFilter} onChange={(event) => setEvidenceFilter(event.target.value as EvidenceFilter)}><option value="all">Any completeness</option><option value="incomplete">Needs research</option><option value="complete">Evidence complete</option><option value="stale">Needs availability recheck ({staleVerificationCount})</option></select></div>
           <div><label htmlFor="shortlist-sort">Order by</label><select id="shortlist-sort" value={shortlistSort} onChange={(event) => setShortlistSort(event.target.value as ShortlistSort)}><option value="newest">Newest saved</option><option value="status">Decision priority</option><option value="title">Title A–Z</option></select></div>
           <p><b>{shownSaved.length}</b> {shownSaved.length === 1 ? 'lead' : 'leads'} in this view</p>
         </div>
@@ -242,6 +254,8 @@ export default function SearchWorkbench() {
                 <tr><th scope="row">Size / variant</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.size || <span className="missingValue">Not recorded</span>}</td>)}</tr>
                 <tr><th scope="row">Condition</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.condition || <span className="missingValue">Not recorded</span>}</td>)}</tr>
                 <tr><th scope="row">Returns / protection</th>{comparedLeads.map((lead) => <td key={lead.url}>{returnPolicyLabel(lead.returnPolicy) || <span className="missingValue">Not verified</span>}</td>)}</tr>
+                <tr><th scope="row">Seller</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.seller || <span className="missingValue">Not recorded</span>}</td>)}</tr>
+                <tr><th scope="row">Listing check</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.listingStatus ? <><span className={`listingPill ${lead.listingStatus}`}>{listingStatusLabel(lead.listingStatus)}</span><small className="checkedDate">{lead.checkedAt ? `Checked ${new Date(lead.checkedAt).toLocaleDateString()}` : 'Not dated'}</small></> : <span className="missingValue">Not verified</span>}</td>)}</tr>
                 <tr><th scope="row">Evidence status</th>{comparedLeads.map((lead) => { const count = leadMissingFields(lead).length; return <td key={lead.url} className={count === 0 ? 'completeValue' : ''}>{count === 0 ? 'Complete' : `${count} details needed`}</td>; })}</tr>
                 <tr><th scope="row">Research notes</th>{comparedLeads.map((lead) => <td key={lead.url} className="comparisonNotes">{lead.notes || <span className="missingValue">Not recorded</span>}</td>)}</tr>
                 <tr><th scope="row">Selection</th>{comparedLeads.map((lead) => <td key={lead.url}><button type="button" className="removeComparison" onClick={() => toggleComparison(lead.url)}>Remove from comparison</button></td>)}</tr>
@@ -257,7 +271,7 @@ export default function SearchWorkbench() {
                 <div><span className={`statusPill ${lead.status}`}>{lead.status}</span><h3><a href={lead.url} target="_blank" rel="noopener noreferrer">{lead.title} ↗</a></h3><p>{lead.source}</p></div>
                 <div className="cardActions"><label className="compareToggle"><input type="checkbox" checked={comparisonUrls.includes(lead.url)} onChange={() => toggleComparison(lead.url)} disabled={!comparisonUrls.includes(lead.url) && comparisonUrls.length >= MAX_COMPARISON_LEADS} /><span>Compare</span></label><button type="button" className="removeLead" onClick={() => toggleSaved(lead)} aria-label={`Remove ${lead.title} from shortlist`}>Remove</button></div>
               </div>
-              <div className={`evidenceStatus ${missing.length === 0 ? 'complete' : ''}`}><strong>{missing.length === 0 ? 'Evidence complete' : `${missing.length} ${missing.length === 1 ? 'detail' : 'details'} needed`}</strong><span>{missing.length === 0 ? 'Ready for a like-for-like decision.' : `Add ${missing.join(', ')} before comparing.`}</span></div>
+              <div className={`evidenceStatus ${missing.length === 0 ? 'complete' : ''}`}><strong>{missing.length === 0 ? 'Evidence complete' : `${missing.length} ${missing.length === 1 ? 'detail' : 'details'} needed`}</strong><span>{missing.length === 0 ? 'Ready for a like-for-like decision.' : `Add ${missing.map((field) => missingFieldLabels[field]).join(', ')} before comparing.`}</span></div>
               <div className="researchFields">
                 <div><label htmlFor={`lead-status-${index}`}>Decision stage</label><select id={`lead-status-${index}`} value={lead.status} onChange={(event) => updateSaved(lead.url, { status: event.target.value as LeadStatus })}><option value="researching">Researching</option><option value="contender">Contender</option><option value="purchased">Purchased</option></select></div>
                 <div><label htmlFor={`lead-price-${index}`}>Item price</label><input id={`lead-price-${index}`} maxLength={80} value={lead.quotedPrice} onChange={(event) => updateSaved(lead.url, { quotedPrice: event.target.value })} placeholder="$95" /></div>
@@ -265,8 +279,11 @@ export default function SearchWorkbench() {
                 <div><label htmlFor={`lead-size-${index}`}>Size / variant</label><input id={`lead-size-${index}`} maxLength={80} value={lead.size} onChange={(event) => updateSaved(lead.url, { size: event.target.value })} placeholder="M · black" /></div>
                 <div><label htmlFor={`lead-condition-${index}`}>Condition</label><input id={`lead-condition-${index}`} maxLength={120} value={lead.condition} onChange={(event) => updateSaved(lead.url, { condition: event.target.value })} placeholder="New · used excellent · flaws" /></div>
                 <div><label htmlFor={`lead-returns-${index}`}>Returns / buyer protection</label><select id={`lead-returns-${index}`} value={lead.returnPolicy} onChange={(event) => updateSaved(lead.url, { returnPolicy: event.target.value as ReturnPolicy })}><option value="">Not verified</option><option value="accepted">Returns accepted</option><option value="exchange-only">Exchange only</option><option value="final-sale">Final sale</option><option value="marketplace-protected">Marketplace protection</option></select></div>
+                <div><label htmlFor={`lead-seller-${index}`}>Seller / shop</label><input id={`lead-seller-${index}`} maxLength={160} value={lead.seller} onChange={(event) => updateSaved(lead.url, { seller: event.target.value })} placeholder="Seller name or handle" /></div>
+                <div><label htmlFor={`lead-availability-${index}`}>Current availability</label><select id={`lead-availability-${index}`} value={lead.listingStatus} onChange={(event) => verifyListing(lead.url, event.target.value as ListingStatus)}><option value="">Not checked</option><option value="available">Available</option><option value="reserved">Reserved</option><option value="sold">Sold</option><option value="removed">Listing removed</option></select></div>
                 <div className="notesField"><label htmlFor={`lead-notes-${index}`}>Research notes</label><textarea id={`lead-notes-${index}`} maxLength={1000} value={lead.notes} onChange={(event) => updateSaved(lead.url, { notes: event.target.value })} placeholder="Returns, condition, measurements, seller questions…" /><small>{lead.notes.length}/1000</small></div>
               </div>
+              <div className={`verificationSummary ${isLeadVerificationStale(lead) ? 'stale' : ''}`}><div><span>Listing verification</span><strong>{lead.checkedAt ? `${listingStatusLabel(lead.listingStatus) || 'Status missing'} · checked ${new Date(lead.checkedAt).toLocaleDateString([], { dateStyle: 'medium' })}` : lead.status === 'purchased' ? 'Recheck not required after purchase' : 'Never checked'}</strong></div>{lead.listingStatus && lead.status !== 'purchased' && <button type="button" onClick={() => verifyListing(lead.url, lead.listingStatus)} aria-label={`Mark ${lead.title} as rechecked now`}>Recheck now</button>}</div>
               <div className="landedSummary"><span>Landed cost</span><strong>{formatLandedCost(lead) || 'Add compatible item and shipping amounts'}</strong></div>
               <p className="savedMeta">Saved {new Date(lead.savedAt).toLocaleDateString([], { dateStyle: 'medium' })}</p>
             </article>;
