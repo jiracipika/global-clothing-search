@@ -17,9 +17,11 @@ import {
   normalizeSavedLeads,
   normalizeSearchHistory,
   parseWorkspaceBackup,
+  returnPolicyLabel,
   toggleComparisonUrl,
   type EvidenceFilter,
   type LeadStatus,
+  type ReturnPolicy,
   type SavedLead,
   type SearchHistory,
   type SearchResult,
@@ -133,7 +135,7 @@ export default function SearchWorkbench() {
     setComparisonUrls((current) => toggleComparisonUrl(current, url, saved));
     setShortlistMessage(atLimit ? `Compare up to ${MAX_COMPARISON_LEADS} leads at a time. Remove one before adding another.` : '');
   }
-  function updateSaved(url: string, patch: Partial<Pick<SavedLead, 'status' | 'quotedPrice' | 'shippingCost' | 'size' | 'notes'>>) {
+  function updateSaved(url: string, patch: Partial<Pick<SavedLead, 'status' | 'quotedPrice' | 'shippingCost' | 'size' | 'condition' | 'returnPolicy' | 'notes'>>) {
     setSaved((old) => old.map((lead) => lead.url === url ? { ...lead, ...patch } : lead));
   }
   function downloadText(contents: BlobPart[], type: string, filename: string) {
@@ -208,7 +210,7 @@ export default function SearchWorkbench() {
           {saved.length > 0 && <><button type="button" className="quiet" onClick={downloadShortlist}>Export CSV ↓</button><button type="button" className="quiet danger" onClick={clearShortlist}>Clear all</button></>}
         </div>
       </div>
-      <p id="shortlist-help" className="muted shortlistHelp">Capture item price, shipping and fees, size, and verification notes before deciding. ThreadHunt calculates landed cost only when both cost fields are parseable in the same currency. Filter the queue as it grows, export a spreadsheet for analysis, or back up the complete local workspace as JSON.</p>
+      <p id="shortlist-help" className="muted shortlistHelp">Capture item price, shipping and fees, size, condition, return protection, and verification notes before deciding. ThreadHunt calculates landed cost only when both cost fields are parseable in the same currency. Filter the queue as it grows, export a spreadsheet for analysis, or back up the complete local workspace as JSON.</p>
       {shortlistMessage && <div className="workspaceNotice" role="status" aria-live="polite"><span>{shortlistMessage}</span>{lastCleared && <button type="button" onClick={undoClear}>Undo clear</button>}</div>}
       {saved.length ? <>
         <div className="shortlistSummary" aria-label="Shortlist progress">
@@ -238,6 +240,8 @@ export default function SearchWorkbench() {
                 <tr><th scope="row">Shipping / fees</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.shippingCost || <span className="missingValue">Not recorded</span>}</td>)}</tr>
                 <tr><th scope="row">Landed cost</th>{comparedLeads.map((lead) => { const total = formatLandedCost(lead); return <td key={lead.url} className={total ? 'landedValue' : ''}>{total || <span className="missingValue">Needs compatible amounts</span>}</td>; })}</tr>
                 <tr><th scope="row">Size / variant</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.size || <span className="missingValue">Not recorded</span>}</td>)}</tr>
+                <tr><th scope="row">Condition</th>{comparedLeads.map((lead) => <td key={lead.url}>{lead.condition || <span className="missingValue">Not recorded</span>}</td>)}</tr>
+                <tr><th scope="row">Returns / protection</th>{comparedLeads.map((lead) => <td key={lead.url}>{returnPolicyLabel(lead.returnPolicy) || <span className="missingValue">Not verified</span>}</td>)}</tr>
                 <tr><th scope="row">Evidence status</th>{comparedLeads.map((lead) => { const count = leadMissingFields(lead).length; return <td key={lead.url} className={count === 0 ? 'completeValue' : ''}>{count === 0 ? 'Complete' : `${count} details needed`}</td>; })}</tr>
                 <tr><th scope="row">Research notes</th>{comparedLeads.map((lead) => <td key={lead.url} className="comparisonNotes">{lead.notes || <span className="missingValue">Not recorded</span>}</td>)}</tr>
                 <tr><th scope="row">Selection</th>{comparedLeads.map((lead) => <td key={lead.url}><button type="button" className="removeComparison" onClick={() => toggleComparison(lead.url)}>Remove from comparison</button></td>)}</tr>
@@ -259,6 +263,8 @@ export default function SearchWorkbench() {
                 <div><label htmlFor={`lead-price-${index}`}>Item price</label><input id={`lead-price-${index}`} maxLength={80} value={lead.quotedPrice} onChange={(event) => updateSaved(lead.url, { quotedPrice: event.target.value })} placeholder="$95" /></div>
                 <div><label htmlFor={`lead-shipping-${index}`}>Shipping / fees</label><input id={`lead-shipping-${index}`} maxLength={80} value={lead.shippingCost} onChange={(event) => updateSaved(lead.url, { shippingCost: event.target.value })} placeholder="$8 or free" /></div>
                 <div><label htmlFor={`lead-size-${index}`}>Size / variant</label><input id={`lead-size-${index}`} maxLength={80} value={lead.size} onChange={(event) => updateSaved(lead.url, { size: event.target.value })} placeholder="M · black" /></div>
+                <div><label htmlFor={`lead-condition-${index}`}>Condition</label><input id={`lead-condition-${index}`} maxLength={120} value={lead.condition} onChange={(event) => updateSaved(lead.url, { condition: event.target.value })} placeholder="New · used excellent · flaws" /></div>
+                <div><label htmlFor={`lead-returns-${index}`}>Returns / buyer protection</label><select id={`lead-returns-${index}`} value={lead.returnPolicy} onChange={(event) => updateSaved(lead.url, { returnPolicy: event.target.value as ReturnPolicy })}><option value="">Not verified</option><option value="accepted">Returns accepted</option><option value="exchange-only">Exchange only</option><option value="final-sale">Final sale</option><option value="marketplace-protected">Marketplace protection</option></select></div>
                 <div className="notesField"><label htmlFor={`lead-notes-${index}`}>Research notes</label><textarea id={`lead-notes-${index}`} maxLength={1000} value={lead.notes} onChange={(event) => updateSaved(lead.url, { notes: event.target.value })} placeholder="Returns, condition, measurements, seller questions…" /><small>{lead.notes.length}/1000</small></div>
               </div>
               <div className="landedSummary"><span>Landed cost</span><strong>{formatLandedCost(lead) || 'Add compatible item and shipping amounts'}</strong></div>

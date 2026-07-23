@@ -48,6 +48,8 @@ describe('shortlist research workflow', () => {
       quotedPrice: '',
       shippingCost: '',
       size: '',
+      condition: '',
+      returnPolicy: '',
       notes: '',
       savedAt: '2026-07-22T00:00:00.000Z',
     });
@@ -69,21 +71,24 @@ describe('shortlist research workflow', () => {
   it('preserves valid research fields while bounding user-entered text', () => {
     const saved = normalizeSavedLeads([{
       ...result('Coat', 'https://shop.test/coat'),
-      status: 'contender', quotedPrice: '$120', shippingCost: 'free', size: 'M', notes: 'x'.repeat(1200), savedAt: '2026-07-21T00:00:00.000Z',
+      status: 'contender', quotedPrice: '$120', shippingCost: 'free', size: 'M', condition: 'New with tags', returnPolicy: 'accepted', notes: 'x'.repeat(1200), savedAt: '2026-07-21T00:00:00.000Z',
     }]);
 
     expect(saved[0].status).toBe('contender');
     expect(saved[0].quotedPrice).toBe('$120');
+    expect(saved[0].condition).toBe('New with tags');
+    expect(saved[0].returnPolicy).toBe('accepted');
     expect(saved[0].notes).toHaveLength(1000);
   });
 
   it('exports spreadsheet-safe CSV with research context', () => {
-    const lead = { ...createSavedLead(result('"Wool, coat"', 'https://shop.test/coat'), '2026-07-22T00:00:00.000Z'), status: 'contender' as const, quotedPrice: '=1+1', shippingCost: '+$8', size: 'M', notes: 'Seller says "new"' };
+    const lead = { ...createSavedLead(result('"Wool, coat"', 'https://shop.test/coat'), '2026-07-22T00:00:00.000Z'), status: 'contender' as const, quotedPrice: '=1+1', shippingCost: '+$8', size: 'M', condition: 'Used, excellent', returnPolicy: 'final-sale' as const, notes: 'Seller says "new"' };
     const csv = exportShortlistCsv([lead]);
 
-    expect(csv).toContain('Title,Source,Status,Item price,Shipping / fees,Landed cost,Size,Notes,URL,Saved at');
+    expect(csv).toContain('Title,Source,Status,Item price,Shipping / fees,Landed cost,Size / variant,Condition,Returns / protection,Notes,URL,Saved at');
     expect(csv).toContain('"""Wool, coat"""');
     expect(csv).toContain("'=1+1");
+    expect(csv).toContain('"Used, excellent",Final sale');
     expect(csv).toContain('"Seller says ""new"""');
   });
 
@@ -100,8 +105,8 @@ describe('shortlist research workflow', () => {
 
   it('identifies the evidence still missing from a lead and filters the research queue', () => {
     const lead = createSavedLead(result('Coat', 'https://shop.test/coat'));
-    const complete = { ...lead, quotedPrice: '$80', shippingCost: 'free', size: 'M', notes: 'Returns accepted' };
-    expect(leadMissingFields(lead)).toEqual(['price', 'shipping', 'size', 'notes']);
+    const complete = { ...lead, quotedPrice: '$80', shippingCost: 'free', size: 'M', condition: 'New', returnPolicy: 'accepted' as const, notes: 'Seller measurements checked' };
+    expect(leadMissingFields(lead)).toEqual(['price', 'shipping', 'size', 'condition', 'returns', 'notes']);
     expect(leadMissingFields(complete)).toEqual([]);
     expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'complete')).toEqual([complete]);
     expect(filterAndSortSavedLeads([lead, complete], 'all', 'newest', 'incomplete')).toEqual([lead]);
@@ -136,7 +141,7 @@ describe('shortlist research workflow', () => {
     expect(restored.saved).toEqual([lead]);
     expect(restored.history).toEqual(history);
     expect(restored.comparisonUrls).toEqual([lead.url]);
-    expect(JSON.parse(backup)).toMatchObject({ product: 'ThreadHunt', version: 3, exportedAt: '2026-07-22T00:00:00.000Z' });
+    expect(JSON.parse(backup)).toMatchObject({ product: 'ThreadHunt', version: 4, exportedAt: '2026-07-22T00:00:00.000Z' });
   });
 
   it('rejects invalid backups and bounds imported history', () => {
@@ -149,5 +154,13 @@ describe('shortlist research workflow', () => {
   it('restores version 1 backups without comparison state', () => {
     const legacy = JSON.stringify({ product: 'ThreadHunt', version: 1, saved: [result('Coat', 'https://shop.test/coat')], history: [] });
     expect(parseWorkspaceBackup(legacy).comparisonUrls).toEqual([]);
+  });
+
+  it('migrates version 3 comparison backups to purchase-risk evidence defaults', () => {
+    const url = 'https://shop.test/coat';
+    const legacy = JSON.stringify({ product: 'ThreadHunt', version: 3, saved: [result('Coat', url)], history: [], comparisonUrls: [url] });
+    const restored = parseWorkspaceBackup(legacy);
+    expect(restored.comparisonUrls).toEqual([url]);
+    expect(restored.saved[0]).toMatchObject({ condition: '', returnPolicy: '' });
   });
 });
