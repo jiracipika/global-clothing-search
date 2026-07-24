@@ -19,11 +19,12 @@ import {
   parseMoney,
   parseWorkspaceBackup,
   safePublicUrl,
+  scoreResult,
   toggleComparisonUrl,
   type SearchResult,
 } from './search-domain';
 
-const result = (title: string, url: string, source = 'shop.test'): SearchResult => ({ title, url, source, snippet: `${title} details` });
+const result = (title: string, url: string, source = 'shop.test', snippet = `${title} details`): SearchResult => ({ title, url, source, snippet });
 
 describe('DuckDuckGo parsing', () => {
   it('extracts, decodes and sanitizes results', () => {
@@ -40,6 +41,32 @@ describe('DuckDuckGo parsing', () => {
 describe('research domain', () => {
   it('deduplicates groups while preserving rank', () => { expect(mergeResults([[result('A','https://a.test')],[result('Again','https://a.test/'),result('B','https://b.test')]]) .map((x) => x.title)).toEqual(['A','B']); });
   it('filters all useful fields and sorts without mutating input', () => { const input=[result('Zebra','https://z.test','z.test'),result('Alpha','https://a.test','a.test')]; expect(filterAndSort(input,'a.test','relevance')).toHaveLength(1); expect(filterAndSort(input,'','title').map(x=>x.title)).toEqual(['Alpha','Zebra']); expect(input[0].title).toBe('Zebra'); });
+  it('does not mutate the input array', () => { const input=[result('B','https://b.test'),result('A','https://a.test')]; expect(filterAndSort(input,'','title')).not.toBe(input); });
+});
+
+describe('relevance scoring', () => {
+  it('returns a neutral score for empty query terms', () => {
+    expect(scoreResult(result('wool coat', 'https://a.test', 'a.test'), [])).toBe(0);
+  });
+  it('scores title matches 3x higher than snippet matches', () => {
+    const titleMatch = result('black wool coat', 'https://a.test', 'a.test', 'general clothing page');
+    const snippetMatch = result('winter jacket', 'https://b.test', 'b.test', 'a warm wool coat for sale');
+    const terms = ['wool', 'coat'];
+    expect(scoreResult(titleMatch, terms)).toBe(6); // 2 terms × 3 (title) = 6
+    expect(scoreResult(snippetMatch, terms)).toBe(2); // 2 terms × 1 (snippet) = 2
+  });
+  it('sorts results by descending relevance score', () => {
+    const input = [
+      result('general clothing page', 'https://low.test', 'low.test', 'misc items'),
+      result('black wool coat on sale', 'https://high.test', 'high.test', 'great deal'),
+    ];
+    const sorted = filterAndSort(input, '', 'relevance', 'black wool coat');
+    expect(sorted.map((x) => x.title)).toEqual(['black wool coat on sale', 'general clothing page']);
+  });
+  it('falls back to original order when no query terms are provided', () => {
+    const input = [result('A', 'https://a.test'), result('B', 'https://b.test')];
+    expect(filterAndSort(input, '', 'relevance', '').map((x) => x.title)).toEqual(['A', 'B']);
+  });
 });
 
 describe('shortlist research workflow', () => {

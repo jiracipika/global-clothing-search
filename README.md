@@ -4,10 +4,11 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 
 ## Product workflow
 
-- Search by item details, region, and optional price target; filter and sort returned leads.
+- Search by item details, region, and optional price target; filter and sort returned leads. Results are scored by query-term relevance — title matches are weighted higher than snippet matches — so the most on-target leads surface first.
 - Region-aware search: selecting US, EU, UK, Japan, China, or Australia targets region-specific resale marketplaces in the resale query bucket (e.g. Vinted/Zalando for EU, Poshmark/eBay for US, Mercari/Rakuten for Japan) and reorders the marketplace panel to surface region-relevant stores first.
 - Shareable searches: use the "Share link" button to copy or share a URL that encodes the current query, region, and price target via query parameters (`?q=…&region=…&max=…`). Opening the link auto-populates and runs the search.
 - Keyboard shortcut: press `/` anywhere outside an input field to jump focus to the search box.
+- In-flight search requests are cancelled automatically when you start a new search, so stale results never overwrite fresh ones.
 - Review per-source diagnostics when an upstream source is partially unavailable.
 - Save leads across searches into a browser-local decision workspace; record stage, item price, shipping/fees, size/variant, condition, returns/buyer protection, seller, current listing status, and research notes.
 - See a landed-cost total when item and shipping amounts use compatible currencies; free/included shipping is supported.
@@ -45,7 +46,7 @@ npm run typecheck
 npm run build
 ```
 
-No environment variables are required. Browser data uses the `threadhunt:saved`, `threadhunt:history`, and `threadhunt:comparison` localStorage keys. Clear these in the UI or browser storage. The in-memory API cache/rate buckets are per server instance and intentionally not a distributed enforcement mechanism.
+No environment variables are required. Browser data uses the `threadhunt:saved`, `threadhunt:history`, and `threadhunt:comparison` localStorage keys; if the browser's storage quota is exceeded the workspace remains usable in-memory for the session. The UI follows the system colour scheme automatically (light or dark) via `prefers-color-scheme`. Clear data in the UI or browser storage. The in-memory API cache/rate buckets are per server instance and intentionally not a distributed enforcement mechanism.
 
 ## Deployment
 

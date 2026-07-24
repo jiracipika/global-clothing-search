@@ -79,6 +79,7 @@ export default function SearchWorkbench() {
   const fileInput = useRef<HTMLInputElement>(null); const videoInput = useRef<HTMLInputElement>(null); const backupInput = useRef<HTMLInputElement>(null); const previewRef = useRef('');
   const queryRef = useRef<HTMLTextAreaElement>(null);
   const shareTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -92,11 +93,13 @@ export default function SearchWorkbench() {
     });
     return () => { active = false; };
   }, []);
-  useEffect(() => { if (ready) localStorage.setItem('threadhunt:saved', JSON.stringify(saved)); }, [saved, ready]);
-  useEffect(() => { if (ready) localStorage.setItem('threadhunt:history', JSON.stringify(history)); }, [history, ready]);
-  useEffect(() => { if (ready) localStorage.setItem('threadhunt:comparison', JSON.stringify(comparisonUrls)); }, [comparisonUrls, ready]);
+  const persist = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage quota exceeded — data stays in memory for this session */ } };
+  useEffect(() => { if (ready) persist('threadhunt:saved', saved); }, [saved, ready]);
+  useEffect(() => { if (ready) persist('threadhunt:history', history); }, [history, ready]);
+  useEffect(() => { if (ready) persist('threadhunt:comparison', comparisonUrls); }, [comparisonUrls, ready]);
   useEffect(() => () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current); }, []);
   useEffect(() => () => { if (shareTimer.current) clearTimeout(shareTimer.current); }, []);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   // Keyboard shortcut: '/' focuses the search box (unless already in a field)
   useEffect(() => {
@@ -119,7 +122,7 @@ export default function SearchWorkbench() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- run deep-link search only once on mount
   }, []);
 
-  const shown = useMemo(() => filterAndSort(data?.results || [], resultFilter, sort), [data, resultFilter, sort]);
+  const shown = useMemo(() => filterAndSort(data?.results || [], resultFilter, sort, data?.query || ''), [data, resultFilter, sort]);
   const shownSaved = useMemo(() => filterAndSortSavedLeads(saved, shortlistFilter, shortlistSort, evidenceFilter), [saved, shortlistFilter, shortlistSort, evidenceFilter]);
   const comparedLeads = useMemo(() => comparisonUrls.flatMap((url) => { const lead = saved.find((item) => item.url === url); return lead ? [lead] : []; }), [comparisonUrls, saved]);
   const readyToCompare = useMemo(() => saved.filter((lead) => leadMissingFields(lead).length === 0).length, [saved]);
@@ -134,13 +137,21 @@ export default function SearchWorkbench() {
   async function runSearch(nextQuery = query) {
     if (loading) return;
     const clean = nextQuery.trim(); if (clean.length < 2) { setError('Enter at least 2 characters.'); return; }
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true); setError('');
     try {
-      const res = await fetch('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: clean, region, maxPrice }) });
+      const res = await fetch('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: clean, region, maxPrice }), signal: controller.signal });
       const json = await res.json() as SearchResponse & { error?: string };
       if (!res.ok) throw new Error(json.error || 'Search failed.');
       setData(json); setHistory((old) => [{ query: clean, region, at: new Date().toISOString() }, ...old.filter((h) => h.query !== clean)].slice(0, 8));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Search failed.'); } finally { setLoading(false); }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      setError(e instanceof Error ? e.message : 'Search failed.');
+    } finally {
+      if (abortRef.current === controller) { abortRef.current = null; setLoading(false); }
+    }
   }
   function submit(e: FormEvent) { e.preventDefault(); void runSearch(); }
   function validate(file: File, types: string[], maxMb: number) {
@@ -266,7 +277,7 @@ export default function SearchWorkbench() {
 
     {frames.length > 0 && <section className="panel"><div className="sectionTitle"><h2>Extracted frames</h2><span>Download, then upload to a visual engine</span></div><div className="frames">{frames.map((f) => <a key={f.at} href={f.url} download={`threadhunt-${Math.round(f.at)}s.jpg`}><img src={f.url} alt={`Video frame at ${f.at.toFixed(1)} seconds`}/><span>{f.at.toFixed(1)} sec ↓</span></a>)}</div></section>}
 
-    {data && <section className="results" aria-busy={loading}><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2>{data.query}</h2><p>{data.results.length} leads · {new Date(data.generatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p></div><div className="resultTools"><label htmlFor="filter">Filter leads</label><input id="filter" type="search" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} placeholder="Title, site, detail…"/><label htmlFor="sort">Sort by</label><select id="sort" value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="relevance">Relevance</option><option value="source">Source</option><option value="title">Title</option></select><button type="button" className="quiet" onClick={() => void shareSearch()}>Share link ↗</button></div></div><div className="diagnostics" aria-label="Source status">{data.diagnostics.map((d) => <span className={d.status} key={d.source}><i/> {d.source}: {d.status === 'ok' ? `${d.count} found` : 'unavailable'}</span>)}</div><div className="cards">{shown.map((r) => <article className="card" key={r.url}><div><small>{r.source}</small><h3><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title} ↗</a></h3><p>{r.snippet || 'Open this result to review the current listing and price.'}</p></div><button type="button" aria-label={`${saved.some((x) => x.url === r.url) ? 'Remove' : 'Add'} ${r.title} ${saved.some((x) => x.url === r.url) ? 'from' : 'to'} shortlist`} onClick={() => toggleSaved(r)}>{saved.some((x) => x.url === r.url) ? 'Saved ✓' : '＋ Shortlist'}</button></article>)}</div>{shown.length === 0 && <p className="emptyResults">No leads match this filter.</p>}<details className="marketPanel"><summary>Browse {data.markets.length} direct marketplace searches</summary><div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noopener noreferrer"><strong>{m.name} ↗</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div></details></section>}
+    {data && <section className="results" aria-busy={loading}><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2>{data.query}</h2><p>{data.results.length} leads · {new Date(data.generatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p></div><div className="resultTools"><label htmlFor="filter">Filter leads</label><input id="filter" type="search" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} placeholder="Title, site, detail…"/><label htmlFor="sort">Sort by</label><select id="sort" value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="relevance">Relevance</option><option value="source">Source</option><option value="title">Title</option></select><button type="button" className="quiet" onClick={() => void shareSearch()}>Share link ↗</button></div></div><div className="diagnostics" aria-label="Source status">{data.diagnostics.map((d) => <span className={d.status} key={d.source}><i/> {d.source}: {d.status === 'ok' ? `${d.count} found` : 'unavailable'}</span>)}</div><div className="cards">{shown.map((r) => <article className="card" key={r.url}><div><small>{r.source}</small><h3><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title} ↗</a></h3><p>{r.snippet || 'Open this result to review the current listing and price.'}</p></div><button type="button" aria-label={`${saved.some((x) => x.url === r.url) ? 'Remove' : 'Add'} ${r.title} ${saved.some((x) => x.url === r.url) ? 'from' : 'to'} shortlist`} onClick={() => toggleSaved(r)}>{saved.some((x) => x.url === r.url) ? 'Saved ✓' : '＋ Shortlist'}</button></article>)}</div>{shown.length === 0 && <p className="emptyResults">{(data?.results.length || 0) === 0 ? 'No leads found. Try broader terms, a different region, or browse the direct marketplace searches below.' : 'No leads match this filter. Clear the filter to see all results.'}</p>}<details className="marketPanel"><summary>Browse {data.markets.length} direct marketplace searches</summary><div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noopener noreferrer"><strong>{m.name} ↗</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div></details></section>}
 
     <section className="panel shortlist" id="shortlist" aria-describedby="shortlist-help">
       <div className="sectionTitle shortlistTitle">

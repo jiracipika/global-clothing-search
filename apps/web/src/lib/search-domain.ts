@@ -283,10 +283,36 @@ export function mergeResults(groups: SearchResult[][], limit = 18): SearchResult
   }).slice(0, limit);
 }
 
-export function filterAndSort(results: SearchResult[], term: string, sort: SortMode): SearchResult[] {
+/**
+ * Score a result against the user's query terms. Title matches are
+ * weighted 3x snippet matches so that results whose headline contains
+ * the searched-for words surface above generic keyword-stuffed pages.
+ * An empty query or result text yields a neutral score of 0.
+ */
+export function scoreResult(result: SearchResult, queryTerms: string[]): number {
+  if (queryTerms.length === 0) return 0;
+  const title = result.title.toLowerCase();
+  const snippet = result.snippet.toLowerCase();
+  let score = 0;
+  for (const term of queryTerms) {
+    if (title.includes(term)) score += 3;
+    if (snippet.includes(term)) score += 1;
+  }
+  return score;
+}
+
+function extractQueryTerms(query: string): string[] {
+  return query.trim().toLowerCase().split(/\s+/).filter((term) => term.length >= 2);
+}
+
+export function filterAndSort(results: SearchResult[], term: string, sort: SortMode, query = ''): SearchResult[] {
   const needle = term.trim().toLowerCase();
   const filtered = needle ? results.filter((r) => `${r.title} ${r.source} ${r.snippet}`.toLowerCase().includes(needle)) : results;
-  if (sort === 'relevance') return filtered;
+  if (sort === 'relevance') {
+    const queryTerms = extractQueryTerms(query);
+    if (queryTerms.length === 0) return filtered;
+    return [...filtered].sort((a, b) => scoreResult(b, queryTerms) - scoreResult(a, queryTerms));
+  }
   return [...filtered].sort((a, b) => (sort === 'source' ? a.source.localeCompare(b.source) : a.title.localeCompare(b.title)));
 }
 
