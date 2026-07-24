@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildSearchQueries,
   createSavedLead,
   decodeDdgUrl,
   decodeHtml,
@@ -194,5 +195,38 @@ describe('shortlist research workflow', () => {
   it('drops verification dates that are not paired with a valid listing status', () => {
     const malformed = { ...result('Coat', 'https://shop.test/coat'), listingStatus: 'unknown', checkedAt: '2026-07-22T00:00:00.000Z' };
     expect(normalizeSavedLeads([malformed])[0]).toMatchObject({ listingStatus: '', checkedAt: '' });
+  });
+});
+
+describe('region-aware search queries', () => {
+  it('produces three bucketed queries with a generic resale set for global region', () => {
+    const queries = buildSearchQueries('wool coat', 'global', '');
+    expect(queries).toHaveLength(3);
+    expect(queries[0]).toContain('wool coat clothing sale price global buy online');
+    expect(queries[1]).toContain('site:ebay.com OR site:vinted.com OR site:depop.com OR site:poshmark.com');
+    expect(queries[2]).toBe('wool coat dupe alternative similar cheaper');
+  });
+
+  it('uses region-specific resale sites when a non-global region is selected', () => {
+    const queries = buildSearchQueries('wool coat', 'EU', '');
+    expect(queries[1]).toContain('site:vinted.com OR site:zalando.com OR site:vestiairecollective.com');
+    expect(queries[1]).not.toContain('site:poshmark.com');
+  });
+
+  it('embeds the price target into the web-search bucket', () => {
+    const queries = buildSearchQueries('wool coat', 'US', '$80');
+    expect(queries[0]).toContain('under $80');
+    expect(queries[0]).toContain('US');
+  });
+
+  it('falls back to the generic resale set for invalid or unknown regions', () => {
+    const queries = buildSearchQueries('wool coat', 'Antarctica', '');
+    expect(queries[1]).toContain('site:ebay.com OR site:vinted.com OR site:depop.com OR site:poshmark.com');
+  });
+
+  it('always produces exactly three queries regardless of inputs', () => {
+    expect(buildSearchQueries('x', 'global', '')).toHaveLength(3);
+    expect(buildSearchQueries('x', 'Japan', '¥5000')).toHaveLength(3);
+    expect(buildSearchQueries('x', null, '')).toHaveLength(3);
   });
 });

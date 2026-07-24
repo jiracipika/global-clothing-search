@@ -5,10 +5,13 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 ## Product workflow
 
 - Search by item details, region, and optional price target; filter and sort returned leads.
+- Region-aware search: selecting US, EU, UK, Japan, China, or Australia targets region-specific resale marketplaces in the resale query bucket (e.g. Vinted/Zalando for EU, Poshmark/eBay for US, Mercari/Rakuten for Japan) and reorders the marketplace panel to surface region-relevant stores first.
+- Shareable searches: use the "Share link" button to copy or share a URL that encodes the current query, region, and price target via query parameters (`?q=…&region=…&max=…`). Opening the link auto-populates and runs the search.
+- Keyboard shortcut: press `/` anywhere outside an input field to jump focus to the search box.
 - Review per-source diagnostics when an upstream source is partially unavailable.
 - Save leads across searches into a browser-local decision workspace; record stage, item price, shipping/fees, size/variant, condition, returns/buyer protection, seller, current listing status, and research notes.
 - See a landed-cost total when item and shipping amounts use compatible currencies; free/included shipping is supported.
-- Triage larger shortlists by decision stage and purchase-risk evidence completeness, with dedicated “needs research,” “evidence complete,” and “needs availability recheck” views. Listing checks expire after seven days; purchased leads are excluded from recheck reminders.
+- Triage larger shortlists by decision stage and purchase-risk evidence completeness, with dedicated "needs research," "evidence complete," and "needs availability recheck" views. Listing checks expire after seven days; purchased leads are excluded from recheck reminders.
 - Select two to four leads for a durable, accessible side-by-side evidence table covering stage, item price, shipping, landed cost, variant, condition, return protection, seller, listing availability, verification date, completeness, and notes.
 - Export the annotated shortlist—including landed-cost and listing-verification columns—as spreadsheet-safe CSV, or back up and merge-restore the complete workspace—including comparison picks—as validated, versioned JSON; older backups and legacy saved leads migrate automatically.
 - Reuse local search history across research sessions.
@@ -16,6 +19,18 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 - File controls validate explicit formats and limits (images 10 MB; videos 75 MB and 5 minutes).
 
 The search API validates and bounds input, applies a small per-instance rate limit and five-minute upstream cache, times out upstream requests, filters non-public result URLs, deduplicates leads, and reports partial failures. DuckDuckGo HTML is an unofficial free source and can change or rate-limit; results are research leads, not verified inventory or final prices.
+
+## Search API
+
+`POST /api/search` — submit a search as JSON:
+
+```json
+{ "query": "wool coat", "region": "EU", "maxPrice": "$80" }
+```
+
+`GET /api/search?q=wool+coat&region=EU&max=$80` — same search as a shareable, bookmarkable link.
+
+Both return `{ query, generatedAt, results[], diagnostics[], markets[], freeSources[], caveats[] }`. The `region` field controls which resale marketplaces are targeted and how the marketplace panel is sorted. Query must be 2–160 characters; price target is optional (max 30 chars). Rate-limited to 12 searches per minute per IP.
 
 ## Develop and verify
 

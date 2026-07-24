@@ -55,3 +55,10 @@ button[aria-disabled="true"]{cursor:wait;opacity:.72}
 @media(max-width:900px){.researchFields{grid-template-columns:repeat(3,1fr)}.notesField{grid-column:1/-1}.queueTools{flex-wrap:wrap}.queueTools p{margin-left:0}}
 @media(max-width:600px){.shortlistActions{width:100%}.shortlistActions button{flex:1}.researchCard{padding:16px}.researchCardHead{align-items:flex-start;flex-direction:column}.cardActions{width:100%;justify-content:space-between}.researchFields{grid-template-columns:1fr}.notesField{grid-column:auto}.shortlistSummary span{flex-basis:40%;padding:12px}.topbar nav{gap:12px}.queueTools{align-items:stretch;flex-direction:column}.queueTools>div{min-width:0}.queueTools p{margin:0}.evidenceStatus{align-items:flex-start;flex-direction:column;gap:2px}.workspaceNotice{align-items:flex-start;flex-direction:column}.comparisonHead{flex-direction:column;gap:12px;padding:16px}.comparisonCount{justify-content:flex-start}.comparisonTable{min-width:620px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
+
+/* Keyboard shortcut and share feedback */
+kbd{display:inline-block;padding:1px 5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;background:#f7f8f4;font-family:Arial,sans-serif;font-size:11px;line-height:1.4}
+.shareNotice{margin:0 0 8px;padding:8px 10px;background:#edf6f1;border-left:3px solid var(--green);font-size:12px;color:#29463a;word-break:break-all}
+.resultTools .quiet{align-self:flex-end;border:1px solid var(--line);background:white;color:var(--green);min-height:44px;padding:7px 12px;cursor:pointer;font-weight:700}
+.resultTools .quiet:hover{border-color:var(--green)}
+@media(max-width:600px){.resultTools{flex-wrap:wrap}}

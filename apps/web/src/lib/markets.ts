@@ -36,6 +36,36 @@ export function buildMarkets(query: string): Market[] {
   ];
 }
 
+type RegionTag = 'global' | 'US' | 'EU' | 'UK' | 'Japan' | 'China' | 'Australia';
+
+const REGION_PRIORITY: Record<RegionTag, Set<string>> = {
+  global: new Set(),
+  US: new Set(['Poshmark', 'The RealReal', 'Amazon', 'eBay', 'Etsy', 'Depop']),
+  EU: new Set(['Vinted', 'Zalando', 'ASOS', 'Vestiaire Collective']),
+  UK: new Set(['Vinted', 'ASOS', 'Depop', 'eBay']),
+  Japan: new Set(['Uniqlo', 'Yahoo Auctions Japan', 'Mercari Japan']),
+  China: new Set(['AliExpress', 'SHEIN', 'Temu', 'Taobao']),
+  Australia: new Set(['eBay', 'Depop', 'The Iconic']),
+};
+
+/**
+ * Reorder markets so that the ones most relevant to the shopper's
+ * region appear first, while keeping every market available.
+ * Visual-search tools (Google Lens, Bing, Yandex) always stay at top
+ * because they are region-agnostic. A stable sort preserves the
+ * original ordering of items with equal priority.
+ */
+export function sortMarketsByRegion(markets: Market[], region: unknown): Market[] {
+  if (typeof region !== 'string' || region === 'global') return markets;
+  const priority = REGION_PRIORITY[region as RegionTag];
+  if (!priority) return markets;
+  return [...markets].sort((a, b) => {
+    const aTop = priority.has(a.name) ? 0 : 1;
+    const bTop = priority.has(b.name) ? 0 : 1;
+    return aTop - bTop;
+  });
+}
+
 export const exampleQueries = [
   'black ribbed cropped cardigan',
   'white linen drawstring pants',

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildMarkets } from '@/lib/markets';
-import { mergeResults, parseDdgHtml, type SearchResult } from '@/lib/search-domain';
+import { buildMarkets, sortMarketsByRegion } from '@/lib/markets';
+import { buildSearchQueries, mergeResults, parseDdgHtml, SEARCH_SOURCE_LABELS, type SearchResult } from '@/lib/search-domain';
 
 export const runtime = 'nodejs';
 const REGIONS = new Set(['global', 'US', 'EU', 'UK', 'Japan', 'China', 'Australia']);
@@ -36,33 +36,55 @@ async function duckDuckGoHtml(query: string): Promise<SearchResult[]> {
   } finally { clearTimeout(timer); }
 }
 
+type SearchPayload = { query: string; region: string; maxPrice: string };
+
+function parseInput(input: Record<string, unknown>): SearchPayload | { error: string; status: number } {
+  if (typeof input.query !== 'string') return { error: 'Query must be text.', status: 400 };
+  const query = input.query.replace(/\s+/g, ' ').trim();
+  if (query.length < 2 || query.length > 160) return { error: 'Query must be 2–160 characters.', status: 400 };
+  const region = typeof input.region === 'string' && REGIONS.has(input.region) ? input.region : 'global';
+  const maxPrice = typeof input.maxPrice === 'string' ? input.maxPrice.replace(/\s+/g, ' ').trim() : '';
+  if (maxPrice.length > 30) return { error: 'Price target is too long.', status: 400 };
+  return { query, region, maxPrice };
+}
+
+async function executeSearch(payload: SearchPayload, ip: string) {
+  if (limited(ip)) return NextResponse.json({ error: 'Too many searches. Try again in a minute.' }, { status: 429, headers: { 'Retry-After': '60' } });
+  const searches = buildSearchQueries(payload.query, payload.region, payload.maxPrice);
+  const settled = await Promise.allSettled(searches.map(duckDuckGoHtml));
+  const diagnostics = settled.map((result, index) => ({ source: SEARCH_SOURCE_LABELS[index], status: result.status === 'fulfilled' ? 'ok' : 'unavailable', count: result.status === 'fulfilled' ? result.value.length : 0 }));
+  const results = mergeResults(settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+  const markets = sortMarketsByRegion(buildMarkets(payload.query), payload.region);
+  return NextResponse.json({ query: payload.query, generatedAt: new Date().toISOString(), results, diagnostics, markets, freeSources: ['DuckDuckGo HTML search', 'marketplace search URLs', 'manual visual-search handoff links'], caveats: ['Listings are leads: verify total price, sizing, seller, authenticity, and returns.', 'Visual search providers require a manual handoff because their public APIs are restricted.'] }, { headers: { 'Cache-Control': 'private, no-store' } });
+}
+
 export async function POST(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
-  if (limited(ip)) return NextResponse.json({ error: 'Too many searches. Try again in a minute.' }, { status: 429, headers: { 'Retry-After': '60' } });
   try {
     if (!req.headers.get('content-type')?.toLowerCase().includes('application/json')) return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     const body: unknown = await req.json();
     if (!body || typeof body !== 'object' || Array.isArray(body)) return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 });
-    const input = body as Record<string, unknown>;
-    if (typeof input.query !== 'string') return NextResponse.json({ error: 'Query must be text.' }, { status: 400 });
-    const query = input.query.replace(/\s+/g, ' ').trim();
-    if (query.length < 2 || query.length > 160) return NextResponse.json({ error: 'Query must be 2–160 characters.' }, { status: 400 });
-    const region = typeof input.region === 'string' && REGIONS.has(input.region) ? input.region : 'global';
-    const maxPrice = typeof input.maxPrice === 'string' ? input.maxPrice.replace(/\s+/g, ' ').trim() : '';
-    if (maxPrice.length > 30) return NextResponse.json({ error: 'Price target is too long.' }, { status: 400 });
-
-    const searches = [
-      `${query} clothing ${maxPrice ? `under ${maxPrice}` : 'sale price'} ${region} buy online`,
-      `${query} site:ebay.com OR site:vinted.com OR site:depop.com OR site:poshmark.com`,
-      `${query} dupe alternative similar cheaper`,
-    ];
-    const settled = await Promise.allSettled(searches.map(duckDuckGoHtml));
-    const diagnostics = settled.map((result, index) => ({ source: ['web', 'resale', 'alternatives'][index], status: result.status === 'fulfilled' ? 'ok' : 'unavailable', count: result.status === 'fulfilled' ? result.value.length : 0 }));
-    const results = mergeResults(settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
-    return NextResponse.json({ query, generatedAt: new Date().toISOString(), results, diagnostics, markets: buildMarkets(query), freeSources: ['DuckDuckGo HTML search', 'marketplace search URLs', 'manual visual-search handoff links'], caveats: ['Listings are leads: verify total price, sizing, seller, authenticity, and returns.', 'Visual search providers require a manual handoff because their public APIs are restricted.'] }, { headers: { 'Cache-Control': 'private, no-store' } });
+    const parsed = parseInput(body as Record<string, unknown>);
+    if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+    const result = await executeSearch(parsed, ip);
+    return result;
   } catch (error) {
     const message = error instanceof SyntaxError ? 'Malformed JSON.' : 'Search is temporarily unavailable.';
     console.error('search route error', error);
     return NextResponse.json({ error: message }, { status: error instanceof SyntaxError ? 400 : 502 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  try {
+    const { searchParams } = req.nextUrl;
+    const parsed = parseInput(Object.fromEntries(searchParams));
+    if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+    const result = await executeSearch(parsed, ip);
+    return result;
+  } catch (error) {
+    console.error('search route error', error);
+    return NextResponse.json({ error: 'Search is temporarily unavailable.' }, { status: 502 });
   }
 }

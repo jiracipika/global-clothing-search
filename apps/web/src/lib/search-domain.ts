@@ -289,3 +289,35 @@ export function filterAndSort(results: SearchResult[], term: string, sort: SortM
   if (sort === 'relevance') return filtered;
   return [...filtered].sort((a, b) => (sort === 'source' ? a.source.localeCompare(b.source) : a.title.localeCompare(b.title)));
 }
+
+export type SearchRegion = 'global' | 'US' | 'EU' | 'UK' | 'Japan' | 'China' | 'Australia';
+const SEARCH_REGIONS = new Set<SearchRegion>(['global', 'US', 'EU', 'UK', 'Japan', 'China', 'Australia']);
+
+const REGION_RESALE_SITES: Record<Exclude<SearchRegion, 'global'>, string> = {
+  US: 'site:ebay.com OR site:poshmark.com OR site:depop.com',
+  EU: 'site:vinted.com OR site:zalando.com OR site:vestiairecollective.com',
+  UK: 'site:vinted.co.uk OR site:ebay.co.uk OR site:depop.com',
+  Japan: 'site:mercari.com OR site:rakuten.co.jp OR site:yahoo.co.jp',
+  China: 'site:taobao.com OR site:aliexpress.com OR site:tmall.com',
+  Australia: 'site:ebay.com.au OR site:depop.com OR site:facebook.com/marketplace',
+};
+
+/**
+ * Build the three bucketed DuckDuckGo queries for a given search brief.
+ * Region-specific resale queries replace the generic resale bucket when
+ * a non-global region is selected, surfacing leads from marketplaces
+ * the shopper can actually buy from.
+ */
+export function buildSearchQueries(query: string, region: unknown, maxPrice: string): string[] {
+  const priceClause = maxPrice.trim() ? `under ${maxPrice.trim()}` : 'sale price';
+  const resaleSites = typeof region === 'string' && SEARCH_REGIONS.has(region as SearchRegion) && region !== 'global'
+    ? REGION_RESALE_SITES[region as Exclude<SearchRegion, 'global'>]
+    : 'site:ebay.com OR site:vinted.com OR site:depop.com OR site:poshmark.com';
+  return [
+    `${query} clothing ${priceClause} ${region} buy online`,
+    `${query} ${resaleSites}`,
+    `${query} dupe alternative similar cheaper`,
+  ];
+}
+
+export const SEARCH_SOURCE_LABELS = ['web', 'resale', 'alternatives'] as const;

@@ -46,9 +46,23 @@ const missingFieldLabels: Record<ReturnType<typeof leadMissingFields>[number], s
   price: 'item price', shipping: 'shipping or fees', size: 'size or variant', condition: 'condition', returns: 'return protection', seller: 'seller', availability: 'current availability', freshness: 'a fresh availability check', notes: 'research notes',
 };
 
+// Read deep-link params once during initial render to avoid setState-in-effect.
+function readDeepLink() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const q = params.get('q');
+  if (!q || q.trim().length < 2) return null;
+  const region = params.get('region');
+  const validRegion = region && ['global', 'US', 'EU', 'UK', 'Japan', 'China', 'Australia'].includes(region) ? region : null;
+  const max = params.get('max');
+  return { q, region: validRegion, max };
+}
+
+const deepLink = readDeepLink();
+
 export default function SearchWorkbench() {
-  const [query, setQuery] = useState('black ribbed cropped cardigan');
-  const [region, setRegion] = useState('global'); const [maxPrice, setMaxPrice] = useState('');
+  const [query, setQuery] = useState(deepLink?.q ?? 'black ribbed cropped cardigan');
+  const [region, setRegion] = useState(deepLink?.region ?? 'global'); const [maxPrice, setMaxPrice] = useState(deepLink?.max ?? '');
   const [imageUrl, setImageUrl] = useState(''); const [preview, setPreview] = useState('');
   const [palette, setPalette] = useState<string[]>([]); const [frames, setFrames] = useState<Frame[]>([]);
   const [data, setData] = useState<SearchResponse | null>(null); const [loading, setLoading] = useState(false);
@@ -61,7 +75,10 @@ export default function SearchWorkbench() {
   const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>('all');
   const [lastCleared, setLastCleared] = useState<SavedLead[] | null>(null);
   const [lastClearedComparison, setLastClearedComparison] = useState<string[]>([]);
+  const [shareMessage, setShareMessage] = useState('');
   const fileInput = useRef<HTMLInputElement>(null); const videoInput = useRef<HTMLInputElement>(null); const backupInput = useRef<HTMLInputElement>(null); const previewRef = useRef('');
+  const queryRef = useRef<HTMLTextAreaElement>(null);
+  const shareTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
@@ -79,6 +96,28 @@ export default function SearchWorkbench() {
   useEffect(() => { if (ready) localStorage.setItem('threadhunt:history', JSON.stringify(history)); }, [history, ready]);
   useEffect(() => { if (ready) localStorage.setItem('threadhunt:comparison', JSON.stringify(comparisonUrls)); }, [comparisonUrls, ready]);
   useEffect(() => () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current); }, []);
+  useEffect(() => () => { if (shareTimer.current) clearTimeout(shareTimer.current); }, []);
+
+  // Keyboard shortcut: '/' focuses the search box (unless already in a field)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable) return;
+      e.preventDefault();
+      queryRef.current?.focus();
+      queryRef.current?.setSelectionRange(queryRef.current.value.length, queryRef.current.value.length);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Deep-link: if URL params were present on load, auto-run the search
+  useEffect(() => {
+    if (!deepLink) return;
+    void runSearch(deepLink.q);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run deep-link search only once on mount
+  }, []);
 
   const shown = useMemo(() => filterAndSort(data?.results || [], resultFilter, sort), [data, resultFilter, sort]);
   const shownSaved = useMemo(() => filterAndSortSavedLeads(saved, shortlistFilter, shortlistSort, evidenceFilter), [saved, shortlistFilter, shortlistSort, evidenceFilter]);
@@ -189,6 +228,23 @@ export default function SearchWorkbench() {
     setSaved(lastCleared); setComparisonUrls(normalizeComparisonUrls(lastClearedComparison, lastCleared)); setShortlistMessage(`Restored ${lastCleared.length} leads.`); setLastCleared(null); setLastClearedComparison([]);
   }
 
+  async function shareSearch() {
+    const params = new URLSearchParams();
+    params.set('q', query.trim());
+    if (region !== 'global') params.set('region', region);
+    if (maxPrice.trim()) params.set('max', maxPrice.trim());
+    const url = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    try {
+      if (navigator.share) { await navigator.share({ title: 'ThreadHunt search', text: query.trim(), url }); return; }
+      await navigator.clipboard.writeText(url);
+      setShareMessage('Search link copied to clipboard.');
+    } catch {
+      setShareMessage(url);
+    }
+    if (shareTimer.current) clearTimeout(shareTimer.current);
+    shareTimer.current = setTimeout(() => setShareMessage(''), 4000);
+  }
+
   return <>
     <a className="skipLink" href="#workspace">Skip to research workspace</a>
     <main id="workspace">
@@ -197,10 +253,11 @@ export default function SearchWorkbench() {
 
     <form className="panel searchPanel" id="search" onSubmit={submit} aria-describedby="search-help">
       <div className="sectionTitle"><div><p className="step">01 / Search brief</p><h2>What are you looking for?</h2></div><span className="privacy">Saved locally in this browser</span></div>
-      <label htmlFor="query">Item description</label><textarea id="query" required minLength={2} maxLength={160} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Color, garment, fabric, brand, fit…" />
-      <p id="search-help" className="hint">Specific materials, cuts, and model names produce stronger leads.</p>
+      <label htmlFor="query">Item description</label><textarea id="query" ref={queryRef} required minLength={2} maxLength={160} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Color, garment, fabric, brand, fit…" />
+      <p id="search-help" className="hint">Specific materials, cuts, and model names produce stronger leads. Press <kbd>/</kbd> to jump here.</p>
       <div className="chips" aria-label="Example searches">{exampleQueries.map((ex) => <button type="button" key={ex} onClick={() => { setQuery(ex); void runSearch(ex); }}>{ex}</button>)}</div>
       <div className="formRow"><div><label htmlFor="region">Shopping region</label><select id="region" value={region} onChange={(e) => setRegion(e.target.value)}><option>global</option><option>US</option><option>EU</option><option>UK</option><option>Japan</option><option>China</option><option>Australia</option></select></div><div><label htmlFor="price">Maximum price <span>(optional)</span></label><input id="price" maxLength={30} value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="$80, €120, ¥12,000" /></div><button className="primary" aria-disabled={loading}>{loading ? 'Researching…' : 'Search sources →'}</button></div>
+      {shareMessage && <p className="shareNotice" role="status" aria-live="polite">{shareMessage}</p>}
       <div className="status" role="status" aria-live="polite">{loading ? 'Checking web, resale, and alternatives sources.' : error ? <strong>{error}</strong> : data ? `${data.results.length} unique leads found.` : 'Ready to search.'}</div>
       {history.length > 0 && <div className="history"><span>Recent</span>{history.map((h) => <button type="button" key={h.query} onClick={() => { setQuery(h.query); void runSearch(h.query); }}>{h.query}</button>)}<button type="button" className="clear" onClick={() => setHistory([])}>Clear</button></div>}
     </form>
@@ -209,7 +266,7 @@ export default function SearchWorkbench() {
 
     {frames.length > 0 && <section className="panel"><div className="sectionTitle"><h2>Extracted frames</h2><span>Download, then upload to a visual engine</span></div><div className="frames">{frames.map((f) => <a key={f.at} href={f.url} download={`threadhunt-${Math.round(f.at)}s.jpg`}><img src={f.url} alt={`Video frame at ${f.at.toFixed(1)} seconds`}/><span>{f.at.toFixed(1)} sec ↓</span></a>)}</div></section>}
 
-    {data && <section className="results"><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2>{data.query}</h2><p>{data.results.length} leads · {new Date(data.generatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p></div><div className="resultTools"><label htmlFor="filter">Filter leads</label><input id="filter" type="search" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} placeholder="Title, site, detail…"/><label htmlFor="sort">Sort by</label><select id="sort" value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="relevance">Relevance</option><option value="source">Source</option><option value="title">Title</option></select></div></div><div className="diagnostics" aria-label="Source status">{data.diagnostics.map((d) => <span className={d.status} key={d.source}><i/> {d.source}: {d.status === 'ok' ? `${d.count} found` : 'unavailable'}</span>)}</div><div className="cards">{shown.map((r) => <article className="card" key={r.url}><div><small>{r.source}</small><h3><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title} ↗</a></h3><p>{r.snippet || 'Open this result to review the current listing and price.'}</p></div><button type="button" aria-label={`${saved.some((x) => x.url === r.url) ? 'Remove' : 'Add'} ${r.title} ${saved.some((x) => x.url === r.url) ? 'from' : 'to'} shortlist`} onClick={() => toggleSaved(r)}>{saved.some((x) => x.url === r.url) ? 'Saved ✓' : '＋ Shortlist'}</button></article>)}</div>{shown.length === 0 && <p className="emptyResults">No leads match this filter.</p>}<details className="marketPanel"><summary>Browse {data.markets.length} direct marketplace searches</summary><div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noopener noreferrer"><strong>{m.name} ↗</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div></details></section>}
+    {data && <section className="results" aria-busy={loading}><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2>{data.query}</h2><p>{data.results.length} leads · {new Date(data.generatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p></div><div className="resultTools"><label htmlFor="filter">Filter leads</label><input id="filter" type="search" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} placeholder="Title, site, detail…"/><label htmlFor="sort">Sort by</label><select id="sort" value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="relevance">Relevance</option><option value="source">Source</option><option value="title">Title</option></select><button type="button" className="quiet" onClick={() => void shareSearch()}>Share link ↗</button></div></div><div className="diagnostics" aria-label="Source status">{data.diagnostics.map((d) => <span className={d.status} key={d.source}><i/> {d.source}: {d.status === 'ok' ? `${d.count} found` : 'unavailable'}</span>)}</div><div className="cards">{shown.map((r) => <article className="card" key={r.url}><div><small>{r.source}</small><h3><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title} ↗</a></h3><p>{r.snippet || 'Open this result to review the current listing and price.'}</p></div><button type="button" aria-label={`${saved.some((x) => x.url === r.url) ? 'Remove' : 'Add'} ${r.title} ${saved.some((x) => x.url === r.url) ? 'from' : 'to'} shortlist`} onClick={() => toggleSaved(r)}>{saved.some((x) => x.url === r.url) ? 'Saved ✓' : '＋ Shortlist'}</button></article>)}</div>{shown.length === 0 && <p className="emptyResults">No leads match this filter.</p>}<details className="marketPanel"><summary>Browse {data.markets.length} direct marketplace searches</summary><div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noopener noreferrer"><strong>{m.name} ↗</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div></details></section>}
 
     <section className="panel shortlist" id="shortlist" aria-describedby="shortlist-help">
       <div className="sectionTitle shortlistTitle">
