@@ -4,9 +4,11 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 
 ## Product workflow
 
-- Search by item details, region, and optional price target; filter and sort returned leads. Results are scored by query-term relevance — title matches are weighted higher than snippet matches — so the most on-target leads surface first.
+- Search by item details, region, and optional price target; filter and sort returned leads. Results are scored by query-term relevance — title matches are weighted higher than snippet matches — so the most on-target leads surface first. Sort by price (low to high) to surface the cheapest leads first, with unpriced results pushed to the end.
+- Filter leads by source bucket (Web, Resale, Alternatives) to focus on a category, or open the top results in bulk. Approximate price hints extracted from snippets appear as badges on each card.
+- As you type in the filter box, matching terms are highlighted in result titles and snippets. The filter is debounced so large result sets stay responsive.
 - Region-aware search: selecting US, EU, UK, Japan, China, or Australia targets region-specific resale marketplaces in the resale query bucket (e.g. Vinted/Zalando for EU, Poshmark/eBay for US, Mercari/Rakuten for Japan) and reorders the marketplace panel to surface region-relevant stores first.
-- Shareable searches: use the "Share link" button to copy or share a URL that encodes the current query, region, and price target via query parameters (`?q=…&region=…&max=…`). Opening the link auto-populates and runs the search.
+- Shareable searches: use the "Share link" button to copy or share a URL that encodes the current query, region, and price target via query parameters (`?q=…&region=…&max=…`). Opening the link auto-populates and runs the search. The browser URL also updates automatically on every search so any result page is bookmarkable and refresh-safe.
 - Keyboard shortcut: press `/` anywhere outside an input field to jump focus to the search box.
 - In-flight search requests are cancelled automatically when you start a new search, so stale results never overwrite fresh ones.
 - Review per-source diagnostics when an upstream source is partially unavailable.
@@ -19,7 +21,7 @@ ThreadHunt is a private, free-source shopping-research workbench. It combines li
 - Extract an image palette or four frames from an MP4/WebM/QuickTime video, then hand them to Lens, Bing, Yandex, or Pinterest. Uploaded files never leave the browser.
 - File controls validate explicit formats and limits (images 10 MB; videos 75 MB and 5 minutes).
 
-The search API validates and bounds input, applies a small per-instance rate limit and five-minute upstream cache, times out upstream requests, filters non-public result URLs, deduplicates leads, and reports partial failures. DuckDuckGo HTML is an unofficial free source and can change or rate-limit; results are research leads, not verified inventory or final prices.
+The search API validates and bounds input, applies a small per-instance rate limit and five-minute upstream cache, times out upstream requests, retries transient upstream failures (timeouts and 5xx/429), filters non-public result URLs, deduplicates leads, and reports partial failures. DuckDuckGo HTML is an unofficial free source and can change or rate-limit; results are research leads, not verified inventory or final prices.
 
 ## Search API
 

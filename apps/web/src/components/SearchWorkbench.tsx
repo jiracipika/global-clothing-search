@@ -8,6 +8,7 @@ import {
   createSavedLead,
   exportShortlistCsv,
   exportWorkspaceBackup,
+  extractPriceHint,
   filterAndSort,
   formatLandedCost,
   filterAndSortSavedLeads,
@@ -21,6 +22,7 @@ import {
   parseWorkspaceBackup,
   returnPolicyLabel,
   toggleComparisonUrl,
+  type BucketFilter,
   type EvidenceFilter,
   type LeadStatus,
   type ListingStatus,
@@ -28,6 +30,7 @@ import {
   type SavedLead,
   type SearchHistory,
   type SearchResult,
+  type SearchResultBucket,
   type ShortlistFilter,
   type ShortlistSort,
   type SortMode,
@@ -38,10 +41,35 @@ type SearchResponse = { query: string; results: SearchResult[]; markets: Market[
 type Frame = { url: string; at: number };
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime'];
+const BUCKET_LABELS: Record<SearchResultBucket, string> = { web: 'Web', resale: 'Resale', alternatives: 'Alternatives' };
+const MAX_BULK_OPEN = 5;
 const load = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) || '') as T; } catch { return fallback; } };
 
 function host(url: string) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } }
 function googleLensUrl(imageUrl: string) { try { const u = new URL(imageUrl); return /^https?:$/.test(u.protocol) ? `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(u.toString())}` : 'https://lens.google.com/'; } catch { return 'https://lens.google.com/'; } }
+
+// Debounce a rapidly-changing value (e.g. filter input) so heavy downstream
+// computations (filter+sort) don't run on every keystroke.
+function useDebouncedValue<T>(value: T, delayMs = 200): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
+// Split text into segments marking which parts match the needle, for
+// XSS-safe highlighting (React escapes text children automatically).
+// String.split with a capturing group inserts captured matches at odd indices.
+function highlightSegments(text: string, needle: string): { text: string; match: boolean }[] {
+  const n = needle.trim();
+  if (!n || !text) return [{ text, match: false }];
+  const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escaped})`, 'gi');
+  const parts = text.split(regex);
+  return parts.filter((s) => s.length > 0).map((s, i) => ({ text: s, match: i % 2 === 1 }));
+}
 const missingFieldLabels: Record<ReturnType<typeof leadMissingFields>[number], string> = {
   price: 'item price', shipping: 'shipping or fees', size: 'size or variant', condition: 'condition', returns: 'return protection', seller: 'seller', availability: 'current availability', freshness: 'a fresh availability check', notes: 'research notes',
 };
@@ -68,6 +96,9 @@ export default function SearchWorkbench() {
   const [data, setData] = useState<SearchResponse | null>(null); const [loading, setLoading] = useState(false);
   const [error, setError] = useState(''); const [mediaError, setMediaError] = useState('');
   const [resultFilter, setResultFilter] = useState(''); const [sort, setSort] = useState<SortMode>('relevance');
+  const [bucketFilter, setBucketFilter] = useState<BucketFilter>('all');
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+  const debouncedFilter = useDebouncedValue(resultFilter, 200);
   const [saved, setSaved] = useState<SavedLead[]>([]); const [history, setHistory] = useState<SearchHistory[]>([]); const [ready, setReady] = useState(false);
   const [comparisonUrls, setComparisonUrls] = useState<string[]>([]);
   const [shortlistMessage, setShortlistMessage] = useState('');
@@ -122,11 +153,66 @@ export default function SearchWorkbench() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- run deep-link search only once on mount
   }, []);
 
-  const shown = useMemo(() => filterAndSort(data?.results || [], resultFilter, sort, data?.query || ''), [data, resultFilter, sort]);
+  const shown = useMemo(() => filterAndSort(data?.results || [], debouncedFilter, sort, data?.query || '', bucketFilter), [data, debouncedFilter, sort, bucketFilter]);
   const shownSaved = useMemo(() => filterAndSortSavedLeads(saved, shortlistFilter, shortlistSort, evidenceFilter), [saved, shortlistFilter, shortlistSort, evidenceFilter]);
   const comparedLeads = useMemo(() => comparisonUrls.flatMap((url) => { const lead = saved.find((item) => item.url === url); return lead ? [lead] : []; }), [comparisonUrls, saved]);
   const readyToCompare = useMemo(() => saved.filter((lead) => leadMissingFields(lead).length === 0).length, [saved]);
   const staleVerificationCount = useMemo(() => saved.filter((lead) => isLeadVerificationStale(lead)).length, [saved]);
+  const bucketCounts = useMemo(() => {
+    const base = data?.results || [];
+    return { web: base.filter((r) => r.bucket === 'web').length, resale: base.filter((r) => r.bucket === 'resale').length, alternatives: base.filter((r) => r.bucket === 'alternatives').length };
+  }, [data]);
+
+  // Reset keyboard focus when the visible result set changes
+  const resultsKey = `${bucketFilter}\u0000${debouncedFilter}\u0000${sort}\u0000${data?.generatedAt ?? ''}`;
+  const prevResultsKey = useRef(resultsKey);
+  if (prevResultsKey.current !== resultsKey) { prevResultsKey.current = resultsKey; if (focusedIndex !== -1) setFocusedIndex(-1); }
+
+  // Keep latest values in refs so the keyboard handler doesn't need to re-subscribe on every state change
+  const focusedIndexRef = useRef(focusedIndex);
+  focusedIndexRef.current = focusedIndex;
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const toggleSavedRef = useRef(toggleSaved);
+  toggleSavedRef.current = toggleSaved;
+
+  // Keyboard navigation within results: j/k moves focus when the results section is on-screen
+  useEffect(() => {
+    if (!data) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'j' && e.key !== 'k' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter' && e.key !== 's') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable) return;
+      const resultsSection = document.getElementById('results-section');
+      if (!resultsSection) return;
+      const rect = resultsSection.getBoundingClientRect();
+      if (rect.top > window.innerHeight || rect.bottom < 0) return;
+      const currentShown = shownRef.current;
+      const currentFocus = focusedIndexRef.current;
+      if (e.key === 'Enter' || e.key === 's') {
+        if (currentFocus < 0 || currentFocus >= currentShown.length) return;
+        e.preventDefault();
+        if (e.key === 'Enter') window.open(currentShown[currentFocus].url, '_blank', 'noopener');
+        else toggleSavedRef.current(currentShown[currentFocus]);
+        return;
+      }
+      e.preventDefault();
+      const max = currentShown.length;
+      if (max === 0) return;
+      if (e.key === 'j' || e.key === 'ArrowDown') setFocusedIndex((prev) => (prev + 1) % max);
+      else setFocusedIndex((prev) => (prev <= 0 ? max - 1 : prev - 1));
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [data]);
+
+  // Scroll the focused card into view
+  useEffect(() => {
+    if (focusedIndex < 0 || focusedIndex >= shown.length) return;
+    document.getElementById(`result-card-${focusedIndex}`)?.scrollIntoView({ block: 'nearest' });
+  }, [focusedIndex, shown.length]);
+
   const visualLinks = useMemo(() => [
     ['Google Lens', googleLensUrl(imageUrl), imageUrl ? 'Open the public image URL directly' : 'Upload or paste an image there'],
     ['Bing Visual Search', 'https://www.bing.com/visualsearch', 'Upload an image or extracted frame'],
@@ -146,6 +232,13 @@ export default function SearchWorkbench() {
       const json = await res.json() as SearchResponse & { error?: string };
       if (!res.ok) throw new Error(json.error || 'Search failed.');
       setData(json); setHistory((old) => [{ query: clean, region, at: new Date().toISOString() }, ...old.filter((h) => h.query !== clean)].slice(0, 8));
+      // Sync URL so the search is bookmarkable/refreshable without adding history noise
+      const params = new URLSearchParams();
+      params.set('q', clean);
+      if (region !== 'global') params.set('region', region);
+      if (maxPrice.trim()) params.set('max', maxPrice.trim());
+      const newUrl = `${window.location.pathname}?${params.toString()}`;
+      window.history.replaceState(null, '', newUrl);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
       setError(e instanceof Error ? e.message : 'Search failed.');
@@ -256,6 +349,14 @@ export default function SearchWorkbench() {
     shareTimer.current = setTimeout(() => setShareMessage(''), 4000);
   }
 
+  function openTopResults() {
+    const targets = shown.slice(0, MAX_BULK_OPEN);
+    for (const item of targets) window.open(item.url, '_blank', 'noopener');
+    setShareMessage(`Opened ${targets.length} ${targets.length === 1 ? 'lead' : 'leads'} in new tabs.`);
+    if (shareTimer.current) clearTimeout(shareTimer.current);
+    shareTimer.current = setTimeout(() => setShareMessage(''), 4000);
+  }
+
   return <>
     <a className="skipLink" href="#workspace">Skip to research workspace</a>
     <main id="workspace">
@@ -265,7 +366,7 @@ export default function SearchWorkbench() {
     <form className="panel searchPanel" id="search" onSubmit={submit} aria-describedby="search-help">
       <div className="sectionTitle"><div><p className="step">01 / Search brief</p><h2>What are you looking for?</h2></div><span className="privacy">Saved locally in this browser</span></div>
       <label htmlFor="query">Item description</label><textarea id="query" ref={queryRef} required minLength={2} maxLength={160} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Color, garment, fabric, brand, fit…" />
-      <p id="search-help" className="hint">Specific materials, cuts, and model names produce stronger leads. Press <kbd>/</kbd> to jump here.</p>
+      <p id="search-help" className="hint">Specific materials, cuts, and model names produce stronger leads. Press <kbd>/</kbd> to jump here. In results, use <kbd>j</kbd>/<kbd>k</kbd> to move, <kbd>Enter</kbd> to open, <kbd>s</kbd> to save.</p>
       <div className="chips" aria-label="Example searches">{exampleQueries.map((ex) => <button type="button" key={ex} onClick={() => { setQuery(ex); void runSearch(ex); }}>{ex}</button>)}</div>
       <div className="formRow"><div><label htmlFor="region">Shopping region</label><select id="region" value={region} onChange={(e) => setRegion(e.target.value)}><option>global</option><option>US</option><option>EU</option><option>UK</option><option>Japan</option><option>China</option><option>Australia</option></select></div><div><label htmlFor="price">Maximum price <span>(optional)</span></label><input id="price" maxLength={30} value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="$80, €120, ¥12,000" /></div><button className="primary" aria-disabled={loading}>{loading ? 'Researching…' : 'Search sources →'}</button></div>
       {shareMessage && <p className="shareNotice" role="status" aria-live="polite">{shareMessage}</p>}
@@ -277,7 +378,9 @@ export default function SearchWorkbench() {
 
     {frames.length > 0 && <section className="panel"><div className="sectionTitle"><h2>Extracted frames</h2><span>Download, then upload to a visual engine</span></div><div className="frames">{frames.map((f) => <a key={f.at} href={f.url} download={`threadhunt-${Math.round(f.at)}s.jpg`}><img src={f.url} alt={`Video frame at ${f.at.toFixed(1)} seconds`}/><span>{f.at.toFixed(1)} sec ↓</span></a>)}</div></section>}
 
-    {data && <section className="results" aria-busy={loading}><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2>{data.query}</h2><p>{data.results.length} leads · {new Date(data.generatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p></div><div className="resultTools"><label htmlFor="filter">Filter leads</label><input id="filter" type="search" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} placeholder="Title, site, detail…"/><label htmlFor="sort">Sort by</label><select id="sort" value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="relevance">Relevance</option><option value="source">Source</option><option value="title">Title</option></select><button type="button" className="quiet" onClick={() => void shareSearch()}>Share link ↗</button></div></div><div className="diagnostics" aria-label="Source status">{data.diagnostics.map((d) => <span className={d.status} key={d.source}><i/> {d.source}: {d.status === 'ok' ? `${d.count} found` : 'unavailable'}</span>)}</div><div className="cards">{shown.map((r) => <article className="card" key={r.url}><div><small>{r.source}</small><h3><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title} ↗</a></h3><p>{r.snippet || 'Open this result to review the current listing and price.'}</p></div><button type="button" aria-label={`${saved.some((x) => x.url === r.url) ? 'Remove' : 'Add'} ${r.title} ${saved.some((x) => x.url === r.url) ? 'from' : 'to'} shortlist`} onClick={() => toggleSaved(r)}>{saved.some((x) => x.url === r.url) ? 'Saved ✓' : '＋ Shortlist'}</button></article>)}</div>{shown.length === 0 && <p className="emptyResults">{(data?.results.length || 0) === 0 ? 'No leads found. Try broader terms, a different region, or browse the direct marketplace searches below.' : 'No leads match this filter. Clear the filter to see all results.'}</p>}<details className="marketPanel"><summary>Browse {data.markets.length} direct marketplace searches</summary><div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noopener noreferrer"><strong>{m.name} ↗</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div></details></section>}
+    {loading && !data && <section className="results" aria-busy="true" aria-label="Loading search results"><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2 className="skeletonBar" aria-hidden="true">&nbsp;</h2><p className="skeletonBarSmall" aria-hidden="true">&nbsp;</p></div></div><div className="cards" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <article className="card skeletonCard" key={i}><div><div className="skeletonBar" />&nbsp;<div className="skeletonBar" />&nbsp;<div className="skeletonBar skeletonBarWide" /></div></article>)}</div></section>}
+
+    {data && <section className="results" id="results-section" aria-busy={loading}><div className="resultsHead"><div><p className="step">03 / Research desk</p><h2>{data.query}</h2><p>{data.results.length} leads · {new Date(data.generatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p></div><div className="resultTools"><label htmlFor="filter">Filter leads</label><input id="filter" type="search" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} placeholder="Title, site, detail…" aria-describedby="filter-count"/><label htmlFor="sort">Sort by</label><select id="sort" value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="relevance">Relevance</option><option value="price-asc">Price (low to high)</option><option value="source">Source</option><option value="title">Title</option></select><button type="button" className="quiet" onClick={() => void shareSearch()}>Share link ↗</button></div></div><div className="resultControls"><div className="bucketFilter" role="group" aria-label="Filter by source bucket"><button type="button" aria-pressed={bucketFilter === 'all'} className={bucketFilter === 'all' ? 'active' : ''} onClick={() => setBucketFilter('all')}>All ({data.results.length})</button><button type="button" aria-pressed={bucketFilter === 'web'} className={bucketFilter === 'web' ? 'active' : ''} onClick={() => setBucketFilter('web')} disabled={bucketCounts.web === 0}>Web ({bucketCounts.web})</button><button type="button" aria-pressed={bucketFilter === 'resale'} className={bucketFilter === 'resale' ? 'active' : ''} onClick={() => setBucketFilter('resale')} disabled={bucketCounts.resale === 0}>Resale ({bucketCounts.resale})</button><button type="button" aria-pressed={bucketFilter === 'alternatives'} className={bucketFilter === 'alternatives' ? 'active' : ''} onClick={() => setBucketFilter('alternatives')} disabled={bucketCounts.alternatives === 0}>Alternatives ({bucketCounts.alternatives})</button></div>{shown.length > 1 && <button type="button" className="quiet openAll" onClick={openTopResults}>Open top {Math.min(MAX_BULK_OPEN, shown.length)} in tabs ↗</button>}</div><span id="filter-count" className="srOnly" aria-live="polite" aria-atomic="true">{shown.length} of {data.results.length} leads shown</span><div className="diagnostics" aria-label="Source status">{data.diagnostics.map((d) => <span className={d.status} key={d.source}><i/> {d.source}: {d.status === 'ok' ? `${d.count} found` : 'unavailable'}</span>)}</div><div className="cards">{shown.map((r, i) => { const priceHint = extractPriceHint(r.snippet); const titleSegs = highlightSegments(r.title, debouncedFilter); const snippetSegs = highlightSegments(r.snippet || 'Open this result to review the current listing and price.', debouncedFilter); return <article className={`card${i === focusedIndex ? ' cardFocused' : ''}`} id={`result-card-${i}`} key={r.url} aria-label={`${r.title} from ${r.source}`}><div><div className="cardMeta"><small>{r.source}</small>{r.bucket && <span className={`bucketTag ${r.bucket}`}>{BUCKET_LABELS[r.bucket]}</span>}{priceHint && <span className="priceHint" title="Approximate price extracted from the result snippet — verify on the listing">~{priceHint}</span>}</div><h3><a href={r.url} target="_blank" rel="noopener noreferrer">{titleSegs.map((seg, si) => seg.match ? <mark key={si}>{seg.text}</mark> : <span key={si}>{seg.text}</span>)} ↗</a></h3><p>{snippetSegs.map((seg, si) => seg.match ? <mark key={si}>{seg.text}</mark> : <span key={si}>{seg.text}</span>)}</p></div><button type="button" aria-label={`${saved.some((x) => x.url === r.url) ? 'Remove' : 'Add'} ${r.title} ${saved.some((x) => x.url === r.url) ? 'from' : 'to'} shortlist`} onClick={() => toggleSaved(r)}>{saved.some((x) => x.url === r.url) ? 'Saved ✓' : '＋ Shortlist'}</button></article>; })}</div>{shown.length === 0 && <p className="emptyResults">{(data?.results.length || 0) === 0 ? 'No leads found. Try broader terms, a different region, or browse the direct marketplace searches below.' : 'No leads match this filter. Clear the filter to see all results.'}</p>}<details className="marketPanel"><summary>Browse {data.markets.length} direct marketplace searches</summary><div className="markets">{data.markets.map((m) => <a key={m.name} href={m.url} target="_blank" rel="noopener noreferrer"><strong>{m.name} ↗</strong><span>{m.region} · {m.kind}</span><p>{m.notes}</p><em>{host(m.url)}</em></a>)}</div></details></section>}
 
     <section className="panel shortlist" id="shortlist" aria-describedby="shortlist-help">
       <div className="sectionTitle shortlistTitle">

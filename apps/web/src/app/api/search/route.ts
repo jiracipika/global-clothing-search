@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildMarkets, sortMarketsByRegion } from '@/lib/markets';
-import { buildSearchQueries, mergeResults, parseDdgHtml, SEARCH_SOURCE_LABELS, type SearchResult } from '@/lib/search-domain';
+import { buildSearchQueries, mergeResults, parseDdgHtml, SEARCH_SOURCE_LABELS, type SearchResult, type SearchResultBucket } from '@/lib/search-domain';
 
 export const runtime = 'nodejs';
 const REGIONS = new Set(['global', 'US', 'EU', 'UK', 'Japan', 'China', 'Australia']);
@@ -15,9 +15,7 @@ function limited(ip: string) {
   return bucket.count > 12;
 }
 
-async function duckDuckGoHtml(query: string): Promise<SearchResult[]> {
-  const cached = cache.get(query);
-  if (cached && cached.expires > Date.now()) return cached.value;
+async function fetchDdgOnce(query: string): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8_000);
   try {
@@ -29,11 +27,34 @@ async function duckDuckGoHtml(query: string): Promise<SearchResult[]> {
     if (!res.ok) throw new Error(`upstream status ${res.status}`);
     const html = await res.text();
     if (html.length > 2_000_000) throw new Error('upstream response too large');
-    const value = parseDdgHtml(html);
-    cache.set(query, { expires: Date.now() + 5 * 60_000, value });
-    if (cache.size > 100) cache.delete(cache.keys().next().value!);
-    return value;
+    return html;
   } finally { clearTimeout(timer); }
+}
+
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+async function duckDuckGoHtml(query: string, maxAttempts = 2): Promise<SearchResult[]> {
+  const cached = cache.get(query);
+  if (cached && cached.expires > Date.now()) return cached.value;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * attempt));
+      const html = await fetchDdgOnce(query);
+      const value = parseDdgHtml(html);
+      cache.set(query, { expires: Date.now() + 5 * 60_000, value });
+      if (cache.size > 100) cache.delete(cache.keys().next().value!);
+      return value;
+    } catch (error) {
+      lastError = error;
+      // Don't retry on aborts (timeout already covered) or non-transient errors
+      const status = error instanceof Error && /upstream status (\d+)/.exec(error.message)?.[1];
+      const code = status ? Number(status) : 0;
+      if (code && !RETRYABLE_STATUS.has(code)) break;
+      if (error instanceof DOMException && error.name === 'AbortError' && attempt === 0) continue; // timeout — one retry
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('upstream search failed');
 }
 
 type SearchPayload = { query: string; region: string; maxPrice: string };
@@ -53,7 +74,11 @@ async function executeSearch(payload: SearchPayload, ip: string) {
   const searches = buildSearchQueries(payload.query, payload.region, payload.maxPrice);
   const settled = await Promise.allSettled(searches.map(duckDuckGoHtml));
   const diagnostics = settled.map((result, index) => ({ source: SEARCH_SOURCE_LABELS[index], status: result.status === 'fulfilled' ? 'ok' : 'unavailable', count: result.status === 'fulfilled' ? result.value.length : 0 }));
-  const results = mergeResults(settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+  const groups: { results: SearchResult[]; bucket: SearchResultBucket }[] = settled.map((result, index) => ({
+    results: result.status === 'fulfilled' ? result.value : [],
+    bucket: SEARCH_SOURCE_LABELS[index] as SearchResultBucket,
+  }));
+  const results = mergeResults(groups);
   const markets = sortMarketsByRegion(buildMarkets(payload.query), payload.region);
   return NextResponse.json({ query: payload.query, generatedAt: new Date().toISOString(), results, diagnostics, markets, freeSources: ['DuckDuckGo HTML search', 'marketplace search URLs', 'manual visual-search handoff links'], caveats: ['Listings are leads: verify total price, sizing, seller, authenticity, and returns.', 'Visual search providers require a manual handoff because their public APIs are restricted.'] }, { headers: { 'Cache-Control': 'private, no-store' } });
 }

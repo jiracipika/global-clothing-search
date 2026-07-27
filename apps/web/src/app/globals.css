@@ -61,6 +61,34 @@ button[aria-disabled="true"]{cursor:wait;opacity:.72}
 /* Keyboard shortcut and share feedback */
 kbd{display:inline-block;padding:1px 5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;background:#f7f8f4;font-family:Arial,sans-serif;font-size:11px;line-height:1.4}
 .shareNotice{margin:0 0 8px;padding:8px 10px;background:#edf6f1;border-left:3px solid var(--green);font-size:12px;color:#29463a;word-break:break-all}
+
+/* Source bucket filter, price hints, and keyboard navigation */
+.resultControls{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:14px 0 0}
+.bucketFilter{display:flex;gap:0;flex-wrap:wrap}.bucketFilter button{border:1px solid var(--line);border-right-width:0;background:white;padding:7px 13px;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--muted);cursor:pointer}.bucketFilter button:first-child{border-radius:0}
+.bucketFilter button:hover:not(:disabled){border-color:var(--green);color:var(--green);position:relative;z-index:1}
+.bucketFilter button.active{background:var(--green);border-color:var(--green);color:white;position:relative;z-index:1}
+.bucketFilter button:disabled{opacity:.4;cursor:not-allowed}
+.bucketFilter button:last-child{border-right-width:1px}
+.openAll{border:1px solid var(--green)!important;background:white!important;color:var(--green)!important;padding:7px 13px!important;font-weight:800!important}
+.openAll:hover{background:#e8f2ed!important}
+.cardMeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px}
+.cardMeta small{margin:0}
+.bucketTag{display:inline-flex;align-items:center;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;background:#eef0eb;color:#5b6661}
+.bucketTag.resale{background:#e7f2eb;color:var(--green)}.bucketTag.alternatives{background:#f2efc7;color:#5d5718}
+.priceHint{display:inline-flex;align-items:center;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:800;font-variant-numeric:tabular-nums;background:#f7f3ea;color:#7a531e;border:1px solid #e5dbc5}
+.card h3 mark,.card p mark{background:#fff3a0;color:inherit;padding:0 2px;border-radius:2px}
+.cardFocused{border-color:var(--green)!important;box-shadow:0 0 0 3px rgba(22,91,66,.18),var(--shadow)!important}
+@media(max-width:600px){.resultControls{flex-direction:column;align-items:stretch}.bucketFilter button{flex:1;text-align:center}}
+@media(prefers-color-scheme:dark){.bucketFilter button{background:var(--white);border-color:var(--line);color:var(--muted)}.bucketFilter button.active{background:var(--green);border-color:var(--green);color:#121612}.bucketTag{background:#252c27;color:#9ba8a0}.bucketTag.resale{background:#1f2c22;color:var(--green)}.bucketTag.alternatives{background:#332f15;color:#d4cc7e}.priceHint{background:#231d12;color:#c9aa5e;border-color:#3a3225}.card h3 mark,.card p mark{background:#5a5310;color:#e8e2b8}.cardFocused{box-shadow:0 0 0 3px rgba(95,184,138,.22),var(--shadow)!important}.openAll{background:var(--white)!important}}
 .resultTools .quiet{align-self:flex-end;border:1px solid var(--line);background:white;color:var(--green);min-height:44px;padding:7px 12px;cursor:pointer;font-weight:700}
 .resultTools .quiet:hover{border-color:var(--green)}
+/* Loading skeleton */
+.skeletonBar{display:block;height:14px;border-radius:3px;background:linear-gradient(90deg,#eceae3 25%,#f5f3ed 50%,#eceae3 75%);background-size:200% 100%;animation:shimmer 1.5s infinite linear;width:70%}
+.skeletonBarSmall{display:block;height:11px;border-radius:3px;background:linear-gradient(90deg,#eceae3 25%,#f5f3ed 50%,#eceae3 75%);background-size:200% 100%;animation:shimmer 1.5s infinite linear;width:40%;margin-top:6px}
+.skeletonBarWide{width:90%}
+.skeletonCard{min-height:140px}
+.skeletonCard>div{display:grid;gap:8px}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+@media(prefers-color-scheme:dark){.skeletonBar,.skeletonBarSmall{background:linear-gradient(90deg,#1f2520 25%,#282f29 50%,#1f2520 75%);background-size:200% 100%}}
+@media(prefers-reduced-motion:reduce){.skeletonBar,.skeletonBarSmall{animation:none}}
 @media(max-width:600px){.resultTools{flex-wrap:wrap}}

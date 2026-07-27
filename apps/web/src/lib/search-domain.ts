@@ -1,5 +1,7 @@
-export type SearchResult = { title: string; url: string; snippet: string; source: string };
-export type SortMode = 'relevance' | 'source' | 'title';
+export type SearchResultBucket = 'web' | 'resale' | 'alternatives';
+export type SearchResult = { title: string; url: string; snippet: string; source: string; bucket?: SearchResultBucket };
+export type BucketFilter = SearchResultBucket | 'all';
+export type SortMode = 'relevance' | 'source' | 'title' | 'price-asc';
 export type LeadStatus = 'researching' | 'contender' | 'purchased';
 export type ReturnPolicy = '' | 'accepted' | 'exchange-only' | 'final-sale' | 'marketplace-protected';
 export type ListingStatus = '' | 'available' | 'reserved' | 'sold' | 'removed';
@@ -258,6 +260,57 @@ export function decodeDdgUrl(raw: string): string | null {
   } catch { return null; }
 }
 
+/**
+ * Best-effort extraction of a plausible price from a result snippet.
+ * Looks for the most common price patterns (currency symbol or code followed
+ * by digits) and prefers explicit "sale"/"priced" markers. Returns the first
+ * plausible match or '' if nothing parseable is found. This is a research
+ * hint, never a verified price — callers must present it as approximate.
+ */
+export function extractPriceHint(snippet: string): string {
+  const clean = snippet.replace(/<[^>]+>/g, ' ').replace(/&#?\w+;/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return '';
+  // Prefer prices near keywords like "sale", "now", "priced", "only".
+  // \b before each keyword prevents matching inside other words (e.g. "snow" → "now").
+  const contextual = clean.match(/\b(?:now|sale|priced|only|from|at|buy)\s*(?:for\s*)?[$€£¥₩₹]?\s?\d[\d.,]*\s?(?:USD|EUR|GBP|JPY|CNY|CAD|AUD)?\b/i);
+  if (contextual) {
+    const price = contextual[0].match(/[$€£¥₩₹]?\s?\d[\d.,]*/);
+    if (price) return price[0].trim();
+  }
+  // Fall back to any standalone currency-prefixed number
+  const symbolPrice = clean.match(/[$€£¥₩₹]\s?\d[\d.,]{0,12}/);
+  if (symbolPrice) return symbolPrice[0].replace(/\s/, '').trim();
+  // ISO currency code followed by a number
+  const codePrice = clean.match(/\b(USD|EUR|GBP|JPY|CNY|CAD|AUD|INR|KRW)\s?\d[\d.,]{0,12}/i);
+  if (codePrice) return codePrice[0].replace(/\s/, ' ').trim();
+  return '';
+}
+
+/**
+ * Convert an extracted price hint string into a numeric value for sorting.
+ * Returns null when no plausible amount is found. This is intentionally
+ * lenient — it's a sorting heuristic, not a verified price.
+ */
+export function priceHintToNumber(hint: string): number | null {
+  if (!hint) return null;
+  const match = hint.match(/[\d.,]+/);
+  if (!match) return null;
+  const numeric = match[0];
+  // Strip thousands separators: if both . and , present, the rightmost is the decimal separator
+  const comma = numeric.lastIndexOf(',');
+  const dot = numeric.lastIndexOf('.');
+  let normalized = numeric;
+  if (comma >= 0 && dot >= 0) {
+    normalized = comma > dot ? numeric.replace(/\./g, '').replace(',', '.') : numeric.replace(/,/g, '');
+  } else if (comma >= 0) {
+    normalized = /,\d{1,2}$/.test(numeric) ? numeric.replace(',', '.') : numeric.replace(/,/g, '');
+  } else if (dot >= 0 && !/\.\d{1,2}$/.test(numeric)) {
+    normalized = numeric.replace(/\./g, '');
+  }
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? amount : null;
+}
+
 export function parseDdgHtml(html: string, limit = 8): SearchResult[] {
   const chunks = html.split(/class=["'][^"']*\bresult\b[^"']*["']/gi).slice(1);
   const results: SearchResult[] = [];
@@ -274,13 +327,20 @@ export function parseDdgHtml(html: string, limit = 8): SearchResult[] {
   return results;
 }
 
-export function mergeResults(groups: SearchResult[][], limit = 18): SearchResult[] {
+export function mergeResults(groups: { results: SearchResult[]; bucket: SearchResultBucket }[], limit = 18): SearchResult[] {
   const seen = new Set<string>();
-  return groups.flat().filter((item) => {
-    const key = item.url.replace(/\/$/, '');
-    if (seen.has(key)) return false;
-    seen.add(key); return true;
-  }).slice(0, limit);
+  const out: SearchResult[] = [];
+  for (const group of groups) {
+    for (const item of group.results) {
+      const tagged: SearchResult = { ...item, bucket: group.bucket };
+      const key = tagged.url.replace(/\/$/, '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(tagged);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
 }
 
 /**
@@ -305,13 +365,28 @@ function extractQueryTerms(query: string): string[] {
   return query.trim().toLowerCase().split(/\s+/).filter((term) => term.length >= 2);
 }
 
-export function filterAndSort(results: SearchResult[], term: string, sort: SortMode, query = ''): SearchResult[] {
+export function filterAndSort(results: SearchResult[], term: string, sort: SortMode, query = '', bucket: BucketFilter = 'all'): SearchResult[] {
   const needle = term.trim().toLowerCase();
-  const filtered = needle ? results.filter((r) => `${r.title} ${r.source} ${r.snippet}`.toLowerCase().includes(needle)) : results;
+  const filtered = results.filter((r) => {
+    const textMatch = !needle || `${r.title} ${r.source} ${r.snippet}`.toLowerCase().includes(needle);
+    const bucketMatch = bucket === 'all' || r.bucket === bucket;
+    return textMatch && bucketMatch;
+  });
   if (sort === 'relevance') {
     const queryTerms = extractQueryTerms(query);
     if (queryTerms.length === 0) return filtered;
     return [...filtered].sort((a, b) => scoreResult(b, queryTerms) - scoreResult(a, queryTerms));
+  }
+  if (sort === 'price-asc') {
+    return [...filtered].sort((a, b) => {
+      const pa = priceHintToNumber(extractPriceHint(a.snippet));
+      const pb = priceHintToNumber(extractPriceHint(b.snippet));
+      // Results with a parseable price come first (ascending), unpriced ones after, stable
+      if (pa === null && pb === null) return 0;
+      if (pa === null) return 1;
+      if (pb === null) return -1;
+      return pa - pb;
+    });
   }
   return [...filtered].sort((a, b) => (sort === 'source' ? a.source.localeCompare(b.source) : a.title.localeCompare(b.title)));
 }

@@ -6,6 +6,7 @@ import {
   decodeHtml,
   exportShortlistCsv,
   exportWorkspaceBackup,
+  extractPriceHint,
   filterAndSort,
   filterAndSortSavedLeads,
   formatLandedCost,
@@ -18,10 +19,12 @@ import {
   parseDdgHtml,
   parseMoney,
   parseWorkspaceBackup,
+  priceHintToNumber,
   safePublicUrl,
   scoreResult,
   toggleComparisonUrl,
   type SearchResult,
+  type SearchResultBucket,
 } from './search-domain';
 
 const result = (title: string, url: string, source = 'shop.test', snippet = `${title} details`): SearchResult => ({ title, url, source, snippet });
@@ -39,7 +42,28 @@ describe('DuckDuckGo parsing', () => {
 });
 
 describe('research domain', () => {
-  it('deduplicates groups while preserving rank', () => { expect(mergeResults([[result('A','https://a.test')],[result('Again','https://a.test/'),result('B','https://b.test')]]) .map((x) => x.title)).toEqual(['A','B']); });
+  it('deduplicates groups while preserving rank and tagging buckets', () => {
+    const groups: { results: SearchResult[]; bucket: SearchResultBucket }[] = [
+      { results: [result('A', 'https://a.test')], bucket: 'web' },
+      { results: [result('Again', 'https://a.test/'), result('B', 'https://b.test')], bucket: 'resale' },
+    ];
+    const merged = mergeResults(groups);
+    expect(merged.map((x) => x.title)).toEqual(['A', 'B']);
+    expect(merged[0].bucket).toBe('web');
+    expect(merged[1].bucket).toBe('resale');
+  });
+  it('respects the limit and stops early', () => {
+    const groups: { results: SearchResult[]; bucket: SearchResultBucket }[] = [
+      { results: [result('A', 'https://a.test'), result('B', 'https://b.test'), result('C', 'https://c.test')], bucket: 'web' },
+      { results: [result('D', 'https://d.test')], bucket: 'resale' },
+    ];
+    const merged = mergeResults(groups, 2);
+    expect(merged).toHaveLength(2);
+    expect(merged.map((x) => x.title)).toEqual(['A', 'B']);
+  });
+  it('handles empty groups without error', () => {
+    expect(mergeResults([])).toEqual([]);
+  });
   it('filters all useful fields and sorts without mutating input', () => { const input=[result('Zebra','https://z.test','z.test'),result('Alpha','https://a.test','a.test')]; expect(filterAndSort(input,'a.test','relevance')).toHaveLength(1); expect(filterAndSort(input,'','title').map(x=>x.title)).toEqual(['Alpha','Zebra']); expect(input[0].title).toBe('Zebra'); });
   it('does not mutate the input array', () => { const input=[result('B','https://b.test'),result('A','https://a.test')]; expect(filterAndSort(input,'','title')).not.toBe(input); });
 });
@@ -66,6 +90,82 @@ describe('relevance scoring', () => {
   it('falls back to original order when no query terms are provided', () => {
     const input = [result('A', 'https://a.test'), result('B', 'https://b.test')];
     expect(filterAndSort(input, '', 'relevance', '').map((x) => x.title)).toEqual(['A', 'B']);
+  });
+  it('filters by source bucket while applying text filter and sort', () => {
+    const input = [
+      { ...result('Wool coat', 'https://a.test'), bucket: 'web' as const },
+      { ...result('Resale coat', 'https://b.test'), bucket: 'resale' as const },
+      { ...result('Dupe coat', 'https://c.test'), bucket: 'alternatives' as const },
+    ];
+    expect(filterAndSort(input, '', 'title', '', 'resale').map((x) => x.title)).toEqual(['Resale coat']);
+    expect(filterAndSort(input, 'coat', 'title', '', 'all').map((x) => x.title)).toEqual(['Dupe coat', 'Resale coat', 'Wool coat']);
+    expect(filterAndSort(input, '', 'title', '', 'web').map((x) => x.bucket)).toEqual(['web']);
+  });
+  it('sorts by price ascending with unpriced results pushed to the end', () => {
+    const input = [
+      result('Expensive', 'https://a.test', 'a.test', 'Priced at $500 premium'),
+      result('Cheap', 'https://b.test', 'b.test', 'Now only $29 sale'),
+      result('No price', 'https://c.test', 'c.test', 'A lovely coat in excellent condition'),
+      result('Mid', 'https://d.test', 'd.test', 'Buy for $120 today'),
+    ];
+    const sorted = filterAndSort(input, '', 'price-asc').map((x) => x.title);
+    expect(sorted).toEqual(['Cheap', 'Mid', 'Expensive', 'No price']);
+  });
+  it('price sort is stable for results with no parseable prices', () => {
+    const input = [result('A', 'https://a.test', 'a.test', 'no price'), result('B', 'https://b.test', 'b.test', 'also none')];
+    const sorted = filterAndSort(input, '', 'price-asc').map((x) => x.title);
+    expect(sorted).toEqual(['A', 'B']);
+  });
+});
+
+describe('price hint extraction', () => {
+  it('extracts a symbol-prefixed price from a snippet', () => {
+    expect(extractPriceHint('Beautiful wool coat now $89.99 on sale')).toBe('$89.99');
+    expect(extractPriceHint('Listed at €120 free shipping')).toBe('€120');
+  });
+  it('prefers contextual prices near sale keywords', () => {
+    expect(extractPriceHint('Regularly $200 now only $149')).toBe('$149');
+    expect(extractPriceHint('Buy for £45 today')).toBe('£45');
+  });
+  it('extracts ISO currency code prices', () => {
+    expect(extractPriceHint('Great deal USD 250 marked down')).toBe('USD 250');
+  });
+  it('returns empty string when no price pattern is found', () => {
+    expect(extractPriceHint('A lovely coat in excellent condition')).toBe('');
+    expect(extractPriceHint('')).toBe('');
+  });
+  it('strips HTML tags before extracting', () => {
+    expect(extractPriceHint('Price: <b>$75</b> for this item')).toBe('$75');
+  });
+  it('extracts Yen prices', () => {
+    expect(extractPriceHint('This jacket is ¥12,800 tax included')).toBe('¥12,800');
+  });
+  it('returns empty when snippet has numbers but no currency context', () => {
+    expect(extractPriceHint('Size 42 jacket model 2024')).toBe('');
+  });
+  it('does not match keywords inside other words (word-boundary fix)', () => {
+    // "snow" should NOT trigger the "now" contextual keyword
+    expect(extractPriceHint('Snow jacket 2024 winter collection')).toBe('');
+    // "buying" should NOT trigger the "buy" contextual keyword — but a currency symbol still works
+    expect(extractPriceHint('Buying guide for coats')).toBe('');
+  });
+});
+
+describe('price hint to number', () => {
+  it('parses a simple dollar amount', () => {
+    expect(priceHintToNumber('$89.99')).toBe(89.99);
+  });
+  it('parses amounts with thousands separators', () => {
+    expect(priceHintToNumber('$1,299')).toBe(1299);
+    expect(priceHintToNumber('¥12,800')).toBe(12800);
+  });
+  it('parses European decimal format', () => {
+    expect(priceHintToNumber('€12,50')).toBe(12.5);
+    expect(priceHintToNumber('EUR 1.234,56')).toBe(1234.56);
+  });
+  it('returns null for empty or non-numeric hints', () => {
+    expect(priceHintToNumber('')).toBeNull();
+    expect(priceHintToNumber('ask seller')).toBeNull();
   });
 });
 

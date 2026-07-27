@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildMarkets, exampleQueries, sortMarketsByRegion } from './markets';
+import { buildMarkets, exampleQueries, REGION_PRIORITY, sortMarketsByRegion } from './markets';
+
+type RegionTag = 'global' | 'US' | 'EU' | 'UK' | 'Japan' | 'China' | 'Australia';
 
 describe('buildMarkets', () => {
   it('produces markets with encoded query in their URLs', () => {
@@ -66,6 +68,29 @@ describe('sortMarketsByRegion', () => {
     const sorted = sortMarketsByRegion(buildMarkets('coat'), 'EU');
     const firstFew = sorted.slice(0, 8);
     expect(firstFew.some((m) => ['Vinted', 'Zalando', 'ASOS'].includes(m.name))).toBe(true);
+  });
+
+  it('prioritizes Japan-relevant marketplaces when Japan is selected', () => {
+    const sorted = sortMarketsByRegion(buildMarkets('coat'), 'Japan');
+    const firstFew = sorted.slice(0, 8);
+    expect(firstFew.some((m) => ['Uniqlo', 'Mercari JP', 'Rakuten'].includes(m.name))).toBe(true);
+  });
+
+  it('prioritizes China-relevant marketplaces when China is selected', () => {
+    const sorted = sortMarketsByRegion(buildMarkets('coat'), 'China');
+    const firstFew = sorted.slice(0, 8);
+    expect(firstFew.some((m) => ['AliExpress', 'SHEIN', 'Temu'].includes(m.name))).toBe(true);
+  });
+
+  it('all REGION_PRIORITY entries exist in buildMarkets output', () => {
+    // Regression: phantom market names that don't exist in buildMarkets silently do nothing
+    const allNames = new Set(buildMarkets('coat').map((m) => m.name));
+    const regions: RegionTag[] = ['US', 'EU', 'UK', 'Japan', 'China', 'Australia'];
+    for (const region of regions) {
+      for (const name of REGION_PRIORITY[region]) {
+        expect(allNames.has(name)).toBe(true);
+      }
+    }
   });
 
   it('preserves all markets (no data loss)', () => {

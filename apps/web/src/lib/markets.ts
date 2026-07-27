@@ -30,6 +30,8 @@ export function buildMarkets(query: string): Market[] {
     { name: 'Zara', region: 'global/ES', kind: 'brand', url: `https://www.zara.com/search?searchTerm=${e}`, notes: 'Official brand search.' },
     { name: 'H&M', region: 'global/SE', kind: 'brand', url: `https://www2.hm.com/en_us/search-results.html?q=${e}`, notes: 'Official cheaper basics.' },
     { name: 'Uniqlo', region: 'global/JP', kind: 'brand', url: `https://www.uniqlo.com/us/en/search?q=${e}`, notes: 'Official basics and alternatives.' },
+    { name: 'Mercari JP', region: 'Japan', kind: 'secondhand', url: `https://jp.mercari.com/search?keyword=${e}`, notes: 'Japan resale marketplace.' },
+    { name: 'Rakuten', region: 'Japan', kind: 'marketplace', url: `https://search.rakuten.co.jp/search/mall/${e}/`, notes: 'Japan shopping mall aggregator.' },
     { name: 'SHEIN', region: 'global/CN', kind: 'brand', url: `https://us.shein.com/pdsearch/${e}/`, notes: 'Very cheap trend matches; quality/ethics caveat.' },
     { name: 'Zalando', region: 'EU', kind: 'marketplace', url: `https://www.zalando.com/catalog/?q=${e}`, notes: 'EU prices for popular brands.' },
     { name: 'Farfetch', region: 'global', kind: 'luxury', url: `https://www.farfetch.com/shopping/search/items.aspx?q=${e}`, notes: 'Luxury retail high-anchor pricing.' },
@@ -38,14 +40,15 @@ export function buildMarkets(query: string): Market[] {
 
 type RegionTag = 'global' | 'US' | 'EU' | 'UK' | 'Japan' | 'China' | 'Australia';
 
-const REGION_PRIORITY: Record<RegionTag, Set<string>> = {
+// Exported for the integrity test that guards against phantom priority names
+export const REGION_PRIORITY: Record<RegionTag, Set<string>> = {
   global: new Set(),
   US: new Set(['Poshmark', 'The RealReal', 'Amazon', 'eBay', 'Etsy', 'Depop']),
   EU: new Set(['Vinted', 'Zalando', 'ASOS', 'Vestiaire Collective']),
   UK: new Set(['Vinted', 'ASOS', 'Depop', 'eBay']),
-  Japan: new Set(['Uniqlo', 'Yahoo Auctions Japan', 'Mercari Japan']),
-  China: new Set(['AliExpress', 'SHEIN', 'Temu', 'Taobao']),
-  Australia: new Set(['eBay', 'Depop', 'The Iconic']),
+  Japan: new Set(['Uniqlo', 'Mercari JP', 'Rakuten']),
+  China: new Set(['AliExpress', 'SHEIN', 'Temu']),
+  Australia: new Set(['eBay', 'Depop']),
 };
 
 /**
