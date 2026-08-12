@@ -1,19 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildMarkets, sortMarketsByRegion } from '@/lib/markets';
 import { buildSearchQueries, mergeResults, parseDdgHtml, SEARCH_SOURCE_LABELS, type SearchResult, type SearchResultBucket } from '@/lib/search-domain';
+import { clientIdentifier, FixedWindowRateLimiter } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 const REGIONS = new Set(['global', 'US', 'EU', 'UK', 'Japan', 'China', 'Australia']);
-const buckets = new Map<string, { count: number; reset: number }>();
+const rateLimiter = new FixedWindowRateLimiter(12, 60_000, 10_000);
 const cache = new Map<string, { expires: number; value: SearchResult[] }>();
-
-function limited(ip: string) {
-  const now = Date.now();
-  const bucket = buckets.get(ip);
-  if (!bucket || bucket.reset < now) { buckets.set(ip, { count: 1, reset: now + 60_000 }); return false; }
-  bucket.count += 1;
-  return bucket.count > 12;
-}
 
 async function fetchDdgOnce(query: string): Promise<string> {
   const controller = new AbortController();
@@ -70,7 +63,8 @@ function parseInput(input: Record<string, unknown>): SearchPayload | { error: st
 }
 
 async function executeSearch(payload: SearchPayload, ip: string) {
-  if (limited(ip)) return NextResponse.json({ error: 'Too many searches. Try again in a minute.' }, { status: 429, headers: { 'Retry-After': '60' } });
+  const rateLimit = rateLimiter.check(ip);
+  if (rateLimit.limited) return NextResponse.json({ error: 'Too many searches. Try again shortly.' }, { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } });
   const searches = buildSearchQueries(payload.query, payload.region, payload.maxPrice);
   const settled = await Promise.allSettled(searches.map(duckDuckGoHtml));
   const diagnostics = settled.map((result, index) => ({ source: SEARCH_SOURCE_LABELS[index], status: result.status === 'fulfilled' ? 'ok' : 'unavailable', count: result.status === 'fulfilled' ? result.value.length : 0 }));
@@ -84,7 +78,7 @@ async function executeSearch(payload: SearchPayload, ip: string) {
 }
 
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  const ip = clientIdentifier(req.headers.get('x-forwarded-for'));
   try {
     if (!req.headers.get('content-type')?.toLowerCase().includes('application/json')) return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     const body: unknown = await req.json();
@@ -101,7 +95,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  const ip = clientIdentifier(req.headers.get('x-forwarded-for'));
   try {
     const { searchParams } = req.nextUrl;
     const parsed = parseInput(Object.fromEntries(searchParams));
