@@ -378,15 +378,26 @@ export function filterAndSort(results: SearchResult[], term: string, sort: SortM
     return [...filtered].sort((a, b) => scoreResult(b, queryTerms) - scoreResult(a, queryTerms));
   }
   if (sort === 'price-asc') {
-    return [...filtered].sort((a, b) => {
-      const pa = priceHintToNumber(extractPriceHint(a.snippet));
-      const pb = priceHintToNumber(extractPriceHint(b.snippet));
-      // Results with a parseable price come first (ascending), unpriced ones after, stable
-      if (pa === null && pb === null) return 0;
-      if (pa === null) return 1;
-      if (pb === null) return -1;
-      return pa - pb;
+    // A scraped price hint is not a currency conversion. Keep currencies in
+    // their first-seen groups and rank only comparable, explicitly-currency
+    // priced results within each group; otherwise a ¥120 listing could appear
+    // cheaper than a $20 listing simply because the numeric value is smaller.
+    const currencyOrder = new Map<string, number>();
+    const priced = filtered.map((result, index) => {
+      const money = parseMoney(extractPriceHint(result.snippet));
+      const currency = money?.currency || '';
+      if (currency && !currencyOrder.has(currency)) currencyOrder.set(currency, currencyOrder.size);
+      return { result, index, currency, amount: money?.amount ?? null };
     });
+    return priced.sort((a, b) => {
+      if (!a.currency && !b.currency) return a.index - b.index;
+      if (!a.currency) return 1;
+      if (!b.currency) return -1;
+      const group = currencyOrder.get(a.currency)! - currencyOrder.get(b.currency)!;
+      if (group) return group;
+      if (a.amount === null || b.amount === null) return a.index - b.index;
+      return a.amount - b.amount || a.index - b.index;
+    }).map(({ result }) => result);
   }
   return [...filtered].sort((a, b) => (sort === 'source' ? a.source.localeCompare(b.source) : a.title.localeCompare(b.title)));
 }

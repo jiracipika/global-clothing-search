@@ -111,6 +111,15 @@ describe('relevance scoring', () => {
     const sorted = filterAndSort(input, '', 'price-asc').map((x) => x.title);
     expect(sorted).toEqual(['Cheap', 'Mid', 'Expensive', 'No price']);
   });
+  it('does not compare price hints across currencies', () => {
+    const input = [
+      result('Dollar expensive', 'https://a.test', 'a.test', 'Priced at $500'),
+      result('Yen listing', 'https://b.test', 'b.test', 'Priced at ¥120'),
+      result('Dollar cheap', 'https://c.test', 'c.test', 'Priced at $20'),
+      result('Euro listing', 'https://d.test', 'd.test', 'Priced at €10'),
+    ];
+    expect(filterAndSort(input, '', 'price-asc').map((x) => x.title)).toEqual(['Dollar cheap', 'Dollar expensive', 'Yen listing', 'Euro listing']);
+  });
   it('price sort is stable for results with no parseable prices', () => {
     const input = [result('A', 'https://a.test', 'a.test', 'no price'), result('B', 'https://b.test', 'b.test', 'also none')];
     const sorted = filterAndSort(input, '', 'price-asc').map((x) => x.title);
